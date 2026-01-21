@@ -8,6 +8,12 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/SergioRibera/weviwavo"
 homepage = "https://github.com/SergioRibera/weviwavo"
 
+[package.metadata.wix]
+upgrade-guid = "F1AE1A70-78BE-4DBA-84EF-C654B0876676"
+path-guid = "DA5096CD-3F50-48BE-B3A5-7296B76A0A17"
+license = false
+eula = false
+
 [lib]
 crate-type = ["cdylib"]
 
