@@ -1,0 +1,44 @@
+[package]
+name = "weviwavo"
+version = "0.1.0"
+edition = "2024"
+description = "WeviWavo"
+authors = ["Sergio Ribera <contact@sergioribera.rs>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/SergioRibera/weviwavo"
+homepage = "https://github.com/SergioRibera/weviwavo"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+async-io = { version = "2.6", features = ["tracing"] }
+freya = "0.4.0-rc.2"
+freya-radio = { version = "0.4.0-rc.2", features = ["tracing"] }
+futures = "0.3"
+kanal = "0.1"
+# freya = { version = "0.4.0-rc.2", path = "../../../contributions/freya/crates/freya/" }
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os="android")'.dependencies]
+android-activity = { version = "0.6.0", features = ["native-activity"] }
+winit = { version = "0.30.12", features = [
+    "android-native-activity",
+    "rwh_06",
+] }
+
+[features]
+default = []
+desktop = []
+
+[[bin]]
+path = "src/lib.rs"
+name = "weviwavo"
+required-features = ["desktop"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

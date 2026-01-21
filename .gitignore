@@ -1,0 +1,6 @@
+*.kjs
+.idea
+gradle/wrapper/
+build
+.gradle
+target
