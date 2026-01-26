@@ -1,6 +1,8 @@
 use freya::prelude::*;
 use freya_radio::prelude::*;
 
+use crate::components::song;
+
 #[derive(Default)]
 struct Data {
     pub lists: Vec<Vec<String>>,
@@ -15,26 +17,21 @@ pub enum DataChannel {
 impl RadioChannel<Data> for DataChannel {}
 
 pub fn init() -> impl IntoElement {
-    use_init_radio_station::<Data, DataChannel>(Data::default);
-    let mut radio = use_radio::<Data, DataChannel>(DataChannel::ListCreation);
+    use_init_root_theme(|| PreferredTheme::Dark.to_theme());
+    // use_init_radio_station::<Data, DataChannel>(Data::default);
+    // let mut radio = use_radio::<Data, DataChannel>(DataChannel::ListCreation);
 
-    let on_press = move |_| {
-        radio.write().lists.push(Vec::default());
-    };
-
-    println!("Running DataChannel::ListCreation");
+    // let on_press = move |_| {
+    //     radio.write().lists.push(Vec::default());
+    // };
 
     rect()
-        .horizontal()
-        .child(Button::new().on_press(on_press).child("Add new list"))
-        .children(
-            radio
-                .read()
-                .lists
-                .iter()
-                .enumerate()
-                .map(|(list_n, _)| ListComp(list_n).into()),
-        )
+        .center()
+        .vertical()
+        .expanded()
+        .theme_color()
+        .theme_background()
+        .child(song())
 }
 
 #[derive(PartialEq)]

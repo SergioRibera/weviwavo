@@ -11,7 +11,7 @@
   outputs = { nixpkgs, flake-utils, rust-overlay, ... }:
     flake-utils.lib.eachDefaultSystem (baseSystem:
       let
-        cargoManifest = builtins.fromTOML (builtins.readFile ./Cargo.toml);
+        cargoManifest = fromTOML (builtins.readFile ./Cargo.toml);
 
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs {
@@ -31,7 +31,6 @@
           libxkbcommon
 
           wayland
-          sqlite
 
           vulkan-loader
         ];
