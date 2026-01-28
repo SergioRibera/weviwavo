@@ -1,6 +1,6 @@
 default:
-    # cargo run -F desktop
-    dx serve --hot-patch --verbose --features desktop
+    cargo run -F desktop
+    # dx serve --hot-patch --verbose --features desktop
 
 genkey key_alias key_store:
     # Run keytool to generate key
