@@ -1346,6 +1346,7 @@ dependencies = [
  "freya-core",
  "freya-edit",
  "freya-engine",
+ "freya-icons",
  "freya-webview",
  "freya-winit",
  "torin",
@@ -1448,6 +1449,15 @@ dependencies = [
  "bitflags 2.10.0",
  "glutin",
  "skia-safe",
+]
+
+[[package]]
+name = "freya-icons"
+version = "0.4.0-rc.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9aadcab214f1b7783fa21fd5604fe6aca65e8133be761e92c9d78fe23baa12d5"
+dependencies = [
+ "bytes",
 ]
 
 [[package]]
