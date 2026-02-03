@@ -1,3 +1,5 @@
+set dotenv-path := ".env"
+
 default:
     cargo run -F desktop
     # dx serve --hot-patch --verbose --features desktop
