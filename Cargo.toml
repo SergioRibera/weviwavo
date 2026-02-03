@@ -35,7 +35,11 @@ tokio = { version = "1.49", default-features = false, features = [
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ytmapi-rs = { path = "../../contributions/youtui/ytmapi-rs/", default-features = false, features = [
+# ytmapi-rs = { path = "../../contributions/youtui/ytmapi-rs/", default-features = false, features = [
+#     "rustls-tls",
+#     "simplified-queries",
+# ] }
+ytmapi-rs = { git = "https://github.com/SergioRibera/youtui", branch = "homefeed", default-features = false, features = [
     "rustls-tls",
     "simplified-queries",
 ] }

@@ -2668,6 +2668,7 @@ dependencies = [
 [[package]]
 name = "json-crawler"
 version = "0.1.0"
+source = "git+https://github.com/SergioRibera/youtui?branch=homefeed#f428960033c04777477136006e9c01f38b55e233"
 dependencies = [
  "serde",
  "serde_json",
@@ -6494,6 +6495,7 @@ dependencies = [
 [[package]]
 name = "ytmapi-rs"
 version = "0.2.4"
+source = "git+https://github.com/SergioRibera/youtui?branch=homefeed#f428960033c04777477136006e9c01f38b55e233"
 dependencies = [
  "chrono",
  "const_format",
