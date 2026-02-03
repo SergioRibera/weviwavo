@@ -2,7 +2,7 @@
 
 ## How to test
 
-Currenttly you need to specify the cookie for visualize the components according to your feed, for get the cookie, the easiest way is:
+Currenttly the project contains a `.env.example`, the first step is create a `.env` file, in that file you have to copy the variable `TEST_COOKIE`, then you need to specify the cookie for visualize the components according to your feed, for get the cookie, the easiest way is:
 
 - Open a private tab in your browser
 - Go to youtube music
