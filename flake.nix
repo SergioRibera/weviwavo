@@ -149,6 +149,16 @@
             llvmPackages.bintools
           ];
           LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath libraries}";
+          
+          shellHook = ''
+            if [ -f .env ]; then
+              set -a
+              source .env
+              set +a
+            else
+              echo "No .env file found"
+            fi
+          '';
         };
       }
     );
