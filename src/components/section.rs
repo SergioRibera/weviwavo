@@ -39,21 +39,21 @@ impl ContainerExt for Section {}
 
 #[derive(PartialEq, Clone, Copy)]
 enum WindowSize {
-    Small,  // <= 1024
-    Large,  // > 1024
+    Small, // <= 1024
+    Large, // > 1024
 }
 
 impl Component for Section {
     fn render(&self) -> impl IntoElement {
         let platform = Platform::get();
-        
+
         let mut max_width_anim = use_animation(|_| {
             AnimNum::new(70., 100.)
                 .function(Function::Sine)
                 .ease(Ease::InOut)
                 .time(100)
         });
-        
+
         let mut prev_window_size = use_state(|| {
             let width = platform.root_size.read().width;
             if width <= 1024. {
@@ -62,7 +62,7 @@ impl Component for Section {
                 WindowSize::Large
             }
         });
-        
+
         let notifier = use_state(|| ());
         let requests = use_state(|| Vec::new());
         let mut scroll_position = use_state(|| (0i32, 0i32));
