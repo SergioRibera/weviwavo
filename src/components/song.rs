@@ -3,7 +3,7 @@ use std::str::FromStr;
 use freya::animation::*;
 use freya::icons::lucide::{audio_lines, play};
 use freya::prelude::*;
-use ytmapi_rs::common::YoutubeID;
+use ytmapi_rs::common::{Thumbnail, YoutubeID};
 use ytmapi_rs::parse::HomeContent;
 
 use super::TextInfo;
@@ -16,14 +16,20 @@ pub struct SongInfo {
     details: Option<TextInfo>,
     is_album: bool,
     is_artist: bool,
+    is_video: bool,
     thumbnail: String,
 }
 
 impl SongInfo {
     fn render_info(&self, on_click: impl Fn(String) + 'static + Clone) -> impl IntoElement {
-        let left_elements = self.left.get_inline_elements(on_click.clone());
+        if self.is_artist {
+            if let Some(details) = &self.details {
+                return details.clone().into_element();
+            }
+            return rect().into_element();
+        }
 
-        let mut all_elements = left_elements;
+        let mut all_elements = self.left.get_inline_elements(on_click.clone());
 
         if let Some(details) = &self.details {
             all_elements.push(Span::new(" • "));
@@ -33,7 +39,17 @@ impl SongInfo {
         paragraph()
             .max_lines(2)
             .text_overflow(TextOverflow::Ellipsis)
+            .text_align(TextAlign::Left)
             .spans_iter(all_elements.into_iter())
+            .into_element()
+    }
+
+    fn get_best_thumbnail(thumbnails: &[Thumbnail]) -> String {
+        thumbnails
+            .iter()
+            .max_by_key(|t| t.width * t.height)
+            .map(|t| t.url.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -44,36 +60,33 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                 let left = if !v.artists.is_empty() {
                     TextInfo::authors(v.artists.clone())
                 } else {
-                    TextInfo::plain("Album")
+                    TextInfo::plain("Album", None)
                 };
 
                 Self {
                     id: v.album_id.get_raw().to_string(),
                     title: v.title.clone(),
                     left,
-                    details: v.year.as_ref().map(|y| TextInfo::plain(y.clone())),
+                    details: v.year.as_ref().map(|y| TextInfo::plain(y.clone(), None)),
                     is_album: true,
                     is_artist: false,
-                    thumbnail: v
-                        .thumbnails
-                        .first()
-                        .map(|t| t.url.clone())
-                        .unwrap_or_default(),
+                    is_video: false,
+                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
                 }
             }
             HomeContent::Playlist(v) => {
                 let left = if !v.author.is_empty() {
                     TextInfo::authors(v.author.clone())
                 } else {
-                    TextInfo::plain("Playlist")
+                    TextInfo::none()
                 };
 
                 let details = if let Some(desc) = &v.description {
-                    Some(TextInfo::plain(desc.clone()))
+                    Some(TextInfo::plain(desc.clone(), None))
                 } else {
                     v.count
                         .as_ref()
-                        .map(|c| TextInfo::plain(format!("{c} songs")))
+                        .map(|c| TextInfo::plain(format!("{c} songs"), None))
                 };
 
                 Self {
@@ -83,15 +96,12 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                     details,
                     is_album: false,
                     is_artist: false,
-                    thumbnail: v
-                        .thumbnails
-                        .first()
-                        .map(|t| t.url.clone())
-                        .unwrap_or_default(),
+                    is_video: false,
+                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
                 }
             }
             HomeContent::WatchPlaylist(v) => {
-                let left = TextInfo::plain("Playlist");
+                let left = TextInfo::plain("Playlist", None);
 
                 Self {
                     id: v.playlist_id.get_raw().to_string(),
@@ -100,41 +110,34 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                     details: None,
                     is_album: true,
                     is_artist: false,
-                    thumbnail: v
-                        .thumbnails
-                        .first()
-                        .map(|t| t.url.clone())
-                        .unwrap_or_default(),
+                    is_video: false,
+                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
                 }
             }
             HomeContent::Artist(v) => Self {
                 id: v.channel_id.get_raw().to_string(),
                 title: v.title.clone(),
-                left: TextInfo::plain("Artist"),
-                details: v
-                    .subscribers
-                    .as_ref()
-                    .map(|s| TextInfo::plain(format!("{} suscriptores", s))),
+                left: TextInfo::none(),
+                details: v.subscribers.as_ref().map(|s| {
+                    TextInfo::plain(format!("{s} de suscriptores"), Some(TextAlign::Center))
+                }),
                 is_album: false,
                 is_artist: true,
-                thumbnail: v
-                    .thumbnails
-                    .first()
-                    .map(|t| t.url.clone())
-                    .unwrap_or_default(),
+                is_video: false,
+                thumbnail: Self::get_best_thumbnail(&v.thumbnails),
             },
             HomeContent::Song(v) => {
                 let left = if !v.artists.is_empty() {
                     TextInfo::authors(v.artists.clone())
                 } else {
-                    TextInfo::plain("Song")
+                    TextInfo::none()
                 };
 
                 let details = v.album.as_ref().map(|album| {
                     if !album.id.get_raw().is_empty() {
                         TextInfo::clickable(album.id.get_raw().to_string(), album.name.clone())
                     } else {
-                        TextInfo::plain(album.name.clone())
+                        TextInfo::plain(album.name.clone(), None)
                     }
                 });
 
@@ -145,11 +148,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                     details,
                     is_album: false,
                     is_artist: false,
-                    thumbnail: v
-                        .thumbnails
-                        .first()
-                        .map(|t| t.url.clone())
-                        .unwrap_or_default(),
+                    is_video: false,
+                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
                 }
             }
             HomeContent::Video(v) => Self {
@@ -158,19 +158,13 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                 left: if !v.artists.is_empty() {
                     TextInfo::authors(v.artists.clone())
                 } else {
-                    TextInfo::plain("Video")
+                    TextInfo::none()
                 },
-                details: v
-                    .views
-                    .as_ref()
-                    .map(|views| TextInfo::plain(format!("{} reproducciones", views))),
+                details: None,
                 is_album: false,
                 is_artist: false,
-                thumbnail: v
-                    .thumbnails
-                    .first()
-                    .map(|t| t.url.clone())
-                    .unwrap_or_default(),
+                is_video: true,
+                thumbnail: Self::get_best_thumbnail(&v.thumbnails),
             },
         }
     }
@@ -179,7 +173,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
 impl Component for SongInfo {
     fn render(&self) -> impl IntoElement {
         let mut is_playing = use_state(|| false);
-        let size = use_state(|| 223.);
+        let size = use_state(|| if self.is_video { 402. } else { 223. });
+        let height = use_state(|| 223.);
         let play_btn_size = use_state(|| 48.);
         let mut hover = use_state(|| false);
 
@@ -208,7 +203,7 @@ impl Component for SongInfo {
                     .expanded()
                     .center()
                     .width(Size::px(size()))
-                    .height(Size::px(size()))
+                    .height(Size::px(height()))
                     .corner_radius(if self.is_artist { size() } else { 8. })
                     .overflow(Overflow::Clip)
                     .on_pointer_enter(move |_| {
@@ -298,20 +293,24 @@ impl Component for SongInfo {
                     .child(
                         label()
                             .max_lines(1)
-                            .text_align(TextAlign::Left)
+                            .text_align(if self.is_artist {
+                                TextAlign::Center
+                            } else {
+                                TextAlign::Left
+                            })
                             .font_weight(FontWeight::BOLD)
+                            .text_overflow(TextOverflow::Ellipsis)
                             .text(self.title.clone()),
                     )
                     .child(
                         rect()
                             .width(Size::Fill)
-                            .text_align(TextAlign::Left)
                             .font_weight(FontWeight::NORMAL)
                             .color(Color::from_hex("#B3B3B3").unwrap())
                             .overflow(Overflow::Clip)
                             .child(self.render_info(|id| {
                                 // Handle click here
-                                println!("Clicked on: {}", id);
+                                println!("Clicked on: {id}");
                             })),
                     ),
             )

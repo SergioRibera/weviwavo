@@ -7,6 +7,7 @@ use ytmapi_rs::parse::ParsedSongArtist;
 #[derive(Clone)]
 pub struct TextInfo {
     layout: LayoutData,
+    align: TextAlign,
     on_click: Arc<dyn Fn(String)>,
     ty: TextInfoType,
 }
@@ -19,6 +20,7 @@ impl PartialEq for TextInfo {
 
 #[derive(Clone, PartialEq)]
 pub enum TextInfoType {
+    None,
     Plain(String),
     Clickable { text: String, id: String },
     Authors(Vec<ParsedSongArtist>),
@@ -27,6 +29,7 @@ pub enum TextInfoType {
 impl Default for TextInfo {
     fn default() -> Self {
         Self {
+            align: TextAlign::Left,
             layout: Default::default(),
             on_click: Arc::new(|_| {}),
             ty: TextInfoType::Plain("".into()),
@@ -35,8 +38,15 @@ impl Default for TextInfo {
 }
 
 impl TextInfo {
-    pub fn plain(content: impl Into<String>) -> Self {
+    pub fn none() -> Self {
         Self {
+            ty: TextInfoType::None,
+            ..Default::default()
+        }
+    }
+    pub fn plain(content: impl Into<String>, align: impl Into<Option<TextAlign>>) -> Self {
+        Self {
+            align: align.into().unwrap_or(TextAlign::Start),
             ty: TextInfoType::Plain(content.into()),
             ..Default::default()
         }
@@ -67,6 +77,7 @@ impl TextInfo {
         on_click: impl Fn(String) + 'static + Clone,
     ) -> Vec<Span<'static>> {
         match &self.ty {
+            TextInfoType::None => vec![],
             TextInfoType::Plain(txt) => {
                 vec![Span::new(txt.clone())]
             }
@@ -115,11 +126,7 @@ impl TextInfo {
 
 impl From<Vec<ParsedSongArtist>> for TextInfo {
     fn from(value: Vec<ParsedSongArtist>) -> Self {
-        Self {
-            layout: LayoutData::default(),
-            on_click: Arc::new(|_| {}),
-            ty: TextInfoType::Authors(value),
-        }
+        Self::authors(value)
     }
 }
 
@@ -135,7 +142,13 @@ impl Component for TextInfo {
     fn render(&self) -> impl IntoElement {
         let on_click = self.on_click.clone();
         match &self.ty {
-            TextInfoType::Plain(txt) => label().text(txt.clone()).max_lines(2).into_element(),
+            TextInfoType::None => rect().into_element(),
+            TextInfoType::Plain(txt) => label()
+                .text(txt.clone())
+                .width(Size::Fill)
+                .max_lines(2)
+                .text_align(self.align)
+                .into_element(),
             TextInfoType::Clickable { text: txt, id } => {
                 let id = id.clone();
                 CursorArea::new()
@@ -155,6 +168,8 @@ impl Component for TextInfo {
 
                 paragraph()
                     .max_lines(2)
+                    .text_align(self.align)
+                    .width(Size::Fill)
                     .spans_iter(self.get_inline_elements(move |id| on_click(id)).into_iter())
                     .into_element()
             }

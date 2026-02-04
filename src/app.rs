@@ -28,9 +28,6 @@ impl Component for MainApp {
 
         // https://accounts.google.com/v3/signin/identifier?continue=https%3A%2F%2Fwww.youtube.com%2Fsignin%3Faction_handle_signin%3Dtrue%26app%3Ddesktop%26hl%3Den%26next%3Dhttps%253A%252F%252Fmusic.youtube.com%252F%26feature%3D__FEATURE__&dsh=S-332057247%3A1769407389042975&hl=en&ifkv=AXbMIuBcVMXNf7v5tojo4FavD_6iFXGCjqj3iUhQOJwznaQ75Q4GaUS5mvFxOobbGpOODtpGwZza&ltmpl=music&passive=true&service=youtube&uilel=3&flowName=GlifWebSignIn&flowEntry=ServiceLogin
 
-        let feed = radio.read().feed.clone();
-        println!("Sections: {}", feed.len());
-
         rect()
             .center()
             .vertical()
@@ -41,8 +38,16 @@ impl Component for MainApp {
                 ScrollView::new()
                     .expanded()
                     .direction(Direction::Vertical)
-                    .spacing(20.)
-                    .children(feed.into_iter().map(Section).map(IntoElement::into_element)),
+                    .spacing(10.)
+                    .children(
+                        radio
+                            .read()
+                            .feed
+                            .clone()
+                            .into_iter()
+                            .map(Section)
+                            .map(IntoElement::into_element),
+                    ),
             )
     }
 }
