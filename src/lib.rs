@@ -58,7 +58,10 @@ fn main() {
         .with_writer(non_blocking)
         .init();
 
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     let _rt = rt.enter();
 
     let mut radio = RadioStation::create_global(app::Data::default());

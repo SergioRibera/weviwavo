@@ -219,7 +219,6 @@ impl Component for SongInfo {
                             .expanded()
                             .center()
                             .image_cover(ImageCover::Center)
-                            .center()
                             .child(
                                 rect()
                                     .expanded()

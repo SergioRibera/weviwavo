@@ -25,6 +25,7 @@ impl Component for MainApp {
         use_share_radio(move || self.radio);
         use_init_root_theme(|| PreferredTheme::Dark.to_theme());
         let radio = use_radio::<Data, DataChannel>(DataChannel::Feed);
+        let radio = radio.read();
 
         // let on_press = move |_| {
         //     radio.write().lists.push(Vec::default());
@@ -54,19 +55,20 @@ impl Component for MainApp {
                     .into_element()
             })))
             .child(
-                ScrollView::new()
-                    .expanded()
-                    .direction(Direction::Vertical)
-                    .spacing(18.)
-                    .children(
-                        radio
-                            .read()
-                            .feed
-                            .clone()
-                            .into_iter()
-                            .map(Section::new)
-                            .map(IntoElement::into_element),
-                    ),
+                rect().expanded().child(
+                    ScrollView::new()
+                        .expanded()
+                        .direction(Direction::Vertical)
+                        .spacing(18.)
+                        .children(
+                            radio
+                                .feed
+                                .clone()
+                                .into_iter()
+                                .map(Section::new)
+                                .map(IntoElement::into_element),
+                        ),
+                ),
             )
     }
 }
