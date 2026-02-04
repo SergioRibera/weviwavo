@@ -7,18 +7,40 @@ use ytmapi_rs::parse::HomeSection;
 use super::SongInfo;
 
 #[derive(PartialEq)]
-pub struct Section(pub HomeSection);
+pub struct Section {
+    layout: LayoutData,
+    home: HomeSection,
+}
+
+impl Section {
+    pub fn new(home: HomeSection) -> Self {
+        Self {
+            home,
+            layout: LayoutData::default(),
+        }
+    }
+}
 
 impl Deref for Section {
     type Target = HomeSection;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.home
     }
 }
 
+impl LayoutExt for Section {
+    fn get_layout(&mut self) -> &mut LayoutData {
+        &mut self.layout
+    }
+}
+
+impl ContainerExt for Section {}
+
 impl Component for Section {
     fn render(&self) -> impl IntoElement {
+        let platform = Platform::get();
+        let mut max_width = use_state(|| Size::percent(70.));
         let notifier = use_state(|| ());
         let requests = use_state(|| Vec::new());
         let mut scroll_position = use_state(|| (0i32, 0i32));
@@ -47,6 +69,15 @@ impl Component for Section {
             )
         });
 
+        use_side_effect(move || {
+            let root_size = platform.root_size.read();
+            if root_size.width <= 1024. {
+                max_width.set(Size::Fill);
+            } else {
+                max_width.set(Size::percent(70.));
+            }
+        });
+
         let scroll_amount = 270; // 250 (item size) + 16 (spacing)
         let content = self.contents.clone();
         let content_len = content.len();
@@ -63,6 +94,8 @@ impl Component for Section {
             .vertical()
             .spacing(16.)
             .padding(10.)
+            .width(Size::Fill)
+            .center()
             .child(
                 rect()
                     .horizontal()
@@ -70,6 +103,7 @@ impl Component for Section {
                     .cross_align(Alignment::End)
                     .main_align(Alignment::SpaceBetween)
                     .padding(Gaps::new_symmetric(0., 8.))
+                    .max_width(max_width.read().clone())
                     .child(
                         rect()
                             .spacing(15.)
@@ -159,9 +193,9 @@ impl Component for Section {
                 ScrollView::new_controlled(scroll_controller)
                     .spacing(20.)
                     .direction(Direction::Horizontal)
-                    .width(Size::Fill)
                     .height(Size::Inner)
                     .show_scrollbar(false)
+                    .width(max_width.read().clone())
                     .children(
                         self.contents
                             .iter()

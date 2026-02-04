@@ -45,7 +45,7 @@ impl Component for MainApp {
                             .feed
                             .clone()
                             .into_iter()
-                            .map(Section)
+                            .map(Section::new)
                             .map(IntoElement::into_element),
                     ),
             )

@@ -32,7 +32,6 @@ impl SongInfo {
         let mut all_elements = self.left.get_inline_elements(on_click.clone());
 
         if let Some(details) = &self.details {
-            all_elements.push(Span::new(" • "));
             all_elements.extend(details.get_inline_elements(on_click));
         }
 
