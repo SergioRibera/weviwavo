@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use freya::icons::lucide::{chevron_left, chevron_right};
-use freya::prelude::*;
+use freya::{animation::*, prelude::*};
 use ytmapi_rs::parse::HomeSection;
 
 use super::SongInfo;
@@ -37,10 +37,32 @@ impl LayoutExt for Section {
 
 impl ContainerExt for Section {}
 
+#[derive(PartialEq, Clone, Copy)]
+enum WindowSize {
+    Small,  // <= 1024
+    Large,  // > 1024
+}
+
 impl Component for Section {
     fn render(&self) -> impl IntoElement {
         let platform = Platform::get();
-        let mut max_width = use_state(|| Size::percent(70.));
+        
+        let mut max_width_anim = use_animation(|_| {
+            AnimNum::new(70., 100.)
+                .function(Function::Sine)
+                .ease(Ease::InOut)
+                .time(100)
+        });
+        
+        let mut prev_window_size = use_state(|| {
+            let width = platform.root_size.read().width;
+            if width <= 1024. {
+                WindowSize::Small
+            } else {
+                WindowSize::Large
+            }
+        });
+        
         let notifier = use_state(|| ());
         let requests = use_state(|| Vec::new());
         let mut scroll_position = use_state(|| (0i32, 0i32));
@@ -69,16 +91,26 @@ impl Component for Section {
             )
         });
 
-        use_side_effect(move || {
-            let root_size = platform.root_size.read();
-            if root_size.width <= 1024. {
-                max_width.set(Size::Fill);
-            } else {
-                max_width.set(Size::percent(70.));
+        let current_width = platform.root_size.read().width;
+        let current_window_size = if current_width <= 1024. {
+            WindowSize::Small
+        } else {
+            WindowSize::Large
+        };
+        
+        if current_window_size != *prev_window_size.read() {
+            match current_window_size {
+                WindowSize::Small => {
+                    max_width_anim.start();
+                }
+                WindowSize::Large => {
+                    max_width_anim.reverse();
+                }
             }
-        });
+            prev_window_size.set(current_window_size);
+        }
 
-        let scroll_amount = 270; // 250 (item size) + 16 (spacing)
+        let scroll_amount = 270; // 250 (item size) + 20 (spacing)
         let content = self.contents.clone();
         let content_len = content.len();
 
@@ -89,6 +121,8 @@ impl Component for Section {
         // Assuming viewport shows ~4-5 items at once
         let max_scroll = (content_len as i32 * scroll_amount).saturating_sub(scroll_amount * 4);
         let can_scroll_right = current_x < max_scroll && content_len > 4;
+
+        let max_width = max_width_anim.read().value();
 
         rect()
             .vertical()
@@ -103,7 +137,7 @@ impl Component for Section {
                     .cross_align(Alignment::End)
                     .main_align(Alignment::SpaceBetween)
                     .padding(Gaps::new_symmetric(0., 8.))
-                    .max_width(max_width.read().clone())
+                    .max_width(Size::percent(max_width))
                     .child(
                         rect()
                             .spacing(15.)
@@ -195,7 +229,7 @@ impl Component for Section {
                     .direction(Direction::Horizontal)
                     .height(Size::Inner)
                     .show_scrollbar(false)
-                    .width(max_width.read().clone())
+                    .width(Size::percent(max_width))
                     .children(
                         self.contents
                             .iter()
