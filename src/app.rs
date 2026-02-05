@@ -55,6 +55,15 @@ impl Component for MainApp {
                     .into_element()
             })))
             .child(
+                rect().horizontal().children(
+                    radio
+                        .feed
+                        .chips
+                        .iter()
+                        .map(|c| label().text(c.title.clone()).into_element()),
+                ),
+            )
+            .child(
                 rect().expanded().child(
                     ScrollView::new()
                         .expanded()
