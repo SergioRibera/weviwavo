@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::str::FromStr;
 
 use freya::icons::lucide::{chevron_left, chevron_right};
 use freya::{animation::*, prelude::*};
@@ -97,7 +98,7 @@ impl Component for Section {
         } else {
             WindowSize::Large
         };
-        
+
         if current_window_size != *prev_window_size.read() {
             match current_window_size {
                 WindowSize::Small => {
@@ -142,14 +143,33 @@ impl Component for Section {
                         rect()
                             .spacing(15.)
                             .horizontal()
-                            // TODO: get image if available
-                            .maybe_child(None::<Element>)
+                            .cross_align(Alignment::Center)
+                            .maybe_child(self.home.thumbnail.as_ref().map(|t| {
+                                rect()
+                                    .center()
+                                    .rounded_full()
+                                    .width(Size::px(56.))
+                                    .height(Size::px(56.))
+                                    .overflow(Overflow::Clip)
+                                    .child(
+                                        ImageViewer::new(Uri::from_str(t.url.as_str()).unwrap())
+                                            .expanded()
+                                            .center()
+                                            .image_cover(ImageCover::Center),
+                                    )
+                                    .into_element()
+                            }))
                             .child(
                                 rect()
-                                    .spacing(10.)
+                                    .spacing(0.)
                                     .vertical()
-                                    // TODO: get extra text if available
-                                    .maybe_child(None::<Element>)
+                                    .maybe_child(self.home.strapline.clone().map(|s| {
+                                        label()
+                                            .font_weight(FontWeight::LIGHT)
+                                            .font_size(19.)
+                                            .text(s)
+                                            .into_element()
+                                    }))
                                     .child(
                                         label()
                                             .font_weight(FontWeight::BOLD)
