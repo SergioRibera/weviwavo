@@ -16,3 +16,4 @@ This is an example of the cookie in Chrome Browser
 ![cookie_image](./.github/images/cookie.webp)
 
 Once you maded the process for get the cookie you can test executing the app with `just` command
+
