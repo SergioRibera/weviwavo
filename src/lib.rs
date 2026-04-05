@@ -37,6 +37,8 @@ fn main() {
     use freya::radio::*;
     use tracing::level_filters::LevelFilter;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+    use ytmapi_rs::{YtMusic, auth::BrowserToken};
 
     use self::app::MainApp;
     use self::utils::data_dir;
@@ -51,12 +53,14 @@ fn main() {
         .with_ansi(false)
         .with_env_filter(
             EnvFilter::builder()
-                .with_default_directive(LevelFilter::TRACE.into())
+                .with_default_directive(LevelFilter::OFF.into())
                 .try_from_env()
                 .unwrap_or_default(),
         )
-        .with_writer(non_blocking)
+        .with_writer(non_blocking.and(std::io::stdout))
         .init();
+
+    tracing::debug!("weviwavo starting");
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -68,20 +72,26 @@ fn main() {
 
     launch(
         LaunchConfig::new()
-            .with_window(WindowConfig::new(MainApp { radio }).with_size(600., 450.))
+            .with_window(WindowConfig::new_app(MainApp { radio }).with_size(600., 450.))
             .with_future(move |_proxy| async move {
-                let yt = ytmapi_rs::YtMusic::from_cookie(env!("TEST_COOKIE"))
-                    .await
-                    .inspect_err(|e| println!("Fail to get no auth client: {e}"));
-                if let Ok(yt) = yt {
-                    radio.write_channel(app::DataChannel::YtApi).yt_session = Some(yt.clone());
-                    if let Ok(feed) = yt
-                        .get_home(Some(4))
+                if let Ok(cookie) = std::env::var("TEST_COOKIE") {
+                    let yt: Result<YtMusic<BrowserToken>, _> = YtMusic::from_cookie(cookie)
                         .await
-                        .inspect_err(|e| println!("Cannot get home feed: {e}"))
-                    {
-                        radio.write_channel(app::DataChannel::Feed).feed = feed;
+                        .inspect_err(|e| tracing::error!(error = %e, "failed to create YT client"));
+                    tracing::debug!(success = yt.is_ok(), "YT client creation finished");
+                    if let Ok(yt) = yt {
+                        radio.write_channel(app::DataChannel::YtApi).yt_session = Some(yt.clone());
+                        if let Ok(feed) = yt.get_home(Some(4)).await.inspect_err(
+                            |e| tracing::error!(error = %e, "failed to fetch home feed"),
+                        ) {
+                            tracing::debug!(sections = feed.len(), "home feed loaded");
+                            radio.write_channel(app::DataChannel::Feed).feed = feed;
+                        }
                     }
+                } else {
+                    tracing::warn!(
+                        "TEST_COOKIE is not set; skipping authenticated YT initialization"
+                    );
                 }
             }),
     )

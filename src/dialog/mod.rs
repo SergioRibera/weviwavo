@@ -20,7 +20,7 @@ use freya::prelude::*;
 /// ```
 #[derive(Clone, PartialEq)]
 pub struct Dialog {
-    title: ReadState<String>,
+    title: Readable<String>,
     children: Vec<Element>,
     actions: Vec<Element>,
     on_close_request: Option<EventHandler<()>>,
@@ -35,7 +35,7 @@ impl KeyExt for Dialog {
 }
 
 impl Dialog {
-    pub fn new(title: impl Into<ReadState<String>>) -> Self {
+    pub fn new(title: impl Into<Readable<String>>) -> Self {
         Self {
             title: title.into(),
             children: vec![],

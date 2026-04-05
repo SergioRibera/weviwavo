@@ -166,7 +166,7 @@ impl Component for Section {
                                     .maybe_child(self.home.strapline.clone().map(|s| {
                                         label()
                                             .font_weight(FontWeight::LIGHT)
-                                            .font_size(19.)
+                                            .font_size(50.)
                                             .text(s)
                                             .into_element()
                                     }))
