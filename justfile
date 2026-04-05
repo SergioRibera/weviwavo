@@ -1,8 +1,11 @@
 set dotenv-path := ".env"
 
 default:
-    cargo run -F desktop
+    RUST_LOG="off" cargo run -F desktop
     # dx serve --hot-patch --verbose --features desktop
+
+dev:
+    RUST_LOG="debug" cargo run -F desktop
 
 genkey key_alias key_store:
     # Run keytool to generate key
