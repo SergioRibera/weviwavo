@@ -1,11 +1,12 @@
 set dotenv-path := ".env"
 
 default:
-    RUST_LOG="off" cargo run -F desktop
-    # dx serve --hot-patch --verbose --features desktop
+    RUST_LOG="off" dx serve --hot-patch --verbose --features desktop
+    # test song
+    # let wid = niri msg --json pick-window | from json | get id; niri msg action toggle-window-floating --id $wid; niri msg action set-window-width --id $wid 250; niri msg action set-window-height --id $wid 320;
 
 dev:
-    RUST_LOG="debug" cargo run -F desktop
+    RUST_LOG="debug" dx serve --hot-patch --verbose --features desktop
 
 genkey key_alias key_store:
     # Run keytool to generate key

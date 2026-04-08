@@ -26,7 +26,6 @@ freya = { version = "0.4.0-rc.6", features = [
     "icons",
     "hotreload",
 ] }
-freya-router = "0.4.0-rc.6"
 tokio = { version = "1.49", default-features = false, features = [
     "macros",
     "rt-multi-thread",

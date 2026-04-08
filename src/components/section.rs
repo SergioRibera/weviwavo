@@ -69,6 +69,7 @@ impl Component for Section {
         let mut scroll_position = use_state(|| (0i32, 0i32));
         let on_scroll = use_state(|| {
             Callback::new(move |ev: ScrollEvent| {
+                println!("On Scroll");
                 let current = *scroll_position.read();
                 match ev {
                     ScrollEvent::X(x) => {
@@ -81,9 +82,12 @@ impl Component for Section {
                 current != *scroll_position.read()
             })
         });
-        let get_scroll = use_state(|| Callback::new(move |_| *scroll_position.read()));
+        let get_scroll = use_state(|| Callback::new(move |_| {
+            println!("Get Scroll");
+            *scroll_position.read()
+        }));
 
-        let mut scroll_controller = use_hook(|| {
+        let scroll_controller = use_hook(|| {
             ScrollController::managed(
                 notifier.clone(),
                 requests.clone(),
@@ -196,7 +200,7 @@ impl Component for Section {
                                 .on_press(move |_| {
                                     if can_scroll_left {
                                         let new_x = (current_x - scroll_amount).max(0);
-                                        scroll_controller.scroll_to_x(new_x);
+                                        scroll_position.write().0 = new_x;
                                     }
                                 })
                                 .child(
@@ -226,7 +230,7 @@ impl Component for Section {
                                 .on_press(move |_| {
                                     if can_scroll_right {
                                         let new_x = current_x + scroll_amount;
-                                        scroll_controller.scroll_to_x(new_x);
+                                        scroll_position.write().0 = new_x;
                                     }
                                 })
                                 .child(

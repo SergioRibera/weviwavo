@@ -10,6 +10,7 @@ const LIGHT_SIZE: f32 = 1024.;
 const LIGHT_SIZE_HALF: f32 = LIGHT_SIZE / 2.;
 const COLORS: &[&str] = &["#081F22", "#1B1F15", "#000000AA", "#081F22"];
 
+#[derive(Clone)]
 pub struct MainApp {
     pub radio: RadioStation<Data, DataChannel>,
 }
