@@ -95,7 +95,9 @@ fn main() {
                 let yt: Result<YtMusic<BrowserToken>, _> = YtMusic::from_cookie(cookies)
                     .await
                     .inspect_err(|e| tracing::error!(error = %e, "failed to create YT client"));
+
                 tracing::debug!(success = yt.is_ok(), "YT client creation finished");
+
                 if let Ok(yt) = yt {
                     radio.write_channel(app::DataChannel::YtApi).yt_session = Some(yt.clone());
                     if let Ok(feed) = yt

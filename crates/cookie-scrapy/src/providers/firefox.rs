@@ -11,7 +11,7 @@ pub async fn get_cookies_from_firefox(
     allowlist_names: Option<&HashSet<String>>,
 ) -> GetCookiesResult {
     let mut warnings = Vec::new();
-    let db_path = resolve_firefox_cookies_db(options.profile.as_deref());
+    let db_path = resolve_firefox_cookies_db(options.root_path, options.profile.as_deref());
     let db_path = match db_path {
         Some(p) => p,
         None => {
@@ -89,10 +89,7 @@ pub async fn get_cookies_from_firefox(
     .await;
 
     match result {
-        Ok(Ok(cookies)) => GetCookiesResult {
-            cookies,
-            warnings,
-        },
+        Ok(Ok(cookies)) => GetCookiesResult { cookies, warnings },
         Ok(Err(e)) => {
             warnings.push(format!("Failed reading Firefox cookies: {e}"));
             GetCookiesResult {
@@ -114,6 +111,7 @@ pub async fn get_cookies_from_firefox(
 pub struct FirefoxOptions {
     pub profile: Option<String>,
     pub include_expired: Option<bool>,
+    pub root_path: Option<PathBuf>,
 }
 
 fn query_firefox_cookies(
@@ -229,23 +227,36 @@ fn query_firefox_cookies(
     Ok(cookies)
 }
 
-fn resolve_firefox_cookies_db(profile: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn firefox_root_path() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
 
-    let roots: Vec<PathBuf> = if cfg!(target_os = "macos") {
-        vec![home.join("Library/Application Support/Firefox/Profiles")]
+    if cfg!(target_os = "macos") {
+        Some(home.join("Library/Application Support/Firefox/Profiles"))
     } else if cfg!(target_os = "linux") {
-        vec![home.join(".mozilla/firefox")]
+        Some(home.join(".mozilla/firefox"))
     } else if cfg!(target_os = "windows") {
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            vec![PathBuf::from(appdata).join("Mozilla/Firefox/Profiles")]
-        } else {
-            vec![]
-        }
+        std::env::var_os("APPDATA")
+            .map(|appdata| PathBuf::from(appdata).join("Mozilla/Firefox/Profiles"))
     } else {
-        vec![]
-    };
+        None
+    }
+}
 
+pub(crate) fn zen_root_path() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+
+    if cfg!(target_os = "macos") {
+        Some(home.join("Library/Application Support/Zen/Profiles"))
+    } else if cfg!(target_os = "linux") {
+        Some(home.join(".zen"))
+    } else if cfg!(target_os = "windows") {
+        std::env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join("zen/Profiles"))
+    } else {
+        None
+    }
+}
+
+fn resolve_firefox_cookies_db(roots: Option<PathBuf>, profile: Option<&str>) -> Option<PathBuf> {
     if let Some(profile) = profile {
         if looks_like_path(profile) {
             let p = PathBuf::from(profile);
@@ -262,19 +273,19 @@ fn resolve_firefox_cookies_db(profile: Option<&str>) -> Option<PathBuf> {
         }
     }
 
-    for root in &roots {
+    roots.and_then(|root| {
         if !root.exists() {
-            continue;
+            return None;
         }
         if let Some(profile) = profile {
             let candidate = root.join(profile).join("cookies.sqlite");
             if candidate.exists() {
                 return Some(candidate);
             }
-            continue;
+            return None;
         }
 
-        let entries = safe_readdir(root);
+        let entries = safe_readdir(&root);
         let default_release = entries.iter().find(|e| e.contains("default-release"));
         let picked = default_release.or(entries.first());
         if let Some(picked) = picked {
@@ -283,9 +294,9 @@ fn resolve_firefox_cookies_db(profile: Option<&str>) -> Option<PathBuf> {
                 return Some(candidate);
             }
         }
-    }
 
-    None
+        None
+    })
 }
 
 fn safe_readdir(dir: &Path) -> Vec<String> {
