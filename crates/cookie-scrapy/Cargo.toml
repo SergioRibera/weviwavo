@@ -1,0 +1,27 @@
+[package]
+name = "cookie-scrapy"
+version = "0.1.1"
+edition = "2021"
+description = "Extract browser cookies from Chrome, Edge, Firefox, and Safari. Reads cookie databases directly with decryption support for macOS Keychain, Linux keyring, and Windows DPAPI."
+license = "MIT"
+repository = "https://github.com/SergioRibera/weviwavo"
+homepage = "https://github.com/SergioRibera/weviwavo"
+readme = "../README.md"
+keywords = ["cookies", "browser", "chrome", "firefox", "safari"]
+categories = ["authentication", "web-programming"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+rusqlite = { version = "0.31", features = ["bundled"] }
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", features = ["hmac"] }
+hmac = "0.12"
+sha1 = "0.10"
+url = "2"
+tempfile = "3"
+dirs = "5"
+tokio = { version = "1", features = ["process", "time", "rt", "macros", "fs"] }

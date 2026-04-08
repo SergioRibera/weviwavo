@@ -31,6 +31,14 @@ fn android_main(droid_app: AndroidApp) {
     )
 }
 
+#[rustfmt::skip]
+const COOKIE_NAMES: &[&str] = &[
+    "VISITOR_INFO1_LIVE", "VISITOR_PRIVACY_METADATA", "_gcl_au", "PREF", "__Secure-BUCKET", "YSC",
+    "__Secure-ROLLOUT_TOKEN", "__Secure-1PSIDTS", "__Secure-3PSIDTS", "HSID", "SSID", "APISID",
+    "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID", "SID", "__Secure-1PSID", "__Secure-3PSID",
+    "LOGIN_INFO", "SIDCC", "__Secure-1PSIDCC", "__Secure-3PSIDCC",
+];
+
 #[allow(dead_code)]
 #[cfg(not(target_os = "android"))]
 fn main() {
@@ -74,24 +82,30 @@ fn main() {
         LaunchConfig::new()
             .with_window(WindowConfig::new_app(MainApp { radio }).with_size(600., 450.))
             .with_future(move |_proxy| async move {
-                if let Ok(cookie) = std::env::var("TEST_COOKIE") {
-                    let yt: Result<YtMusic<BrowserToken>, _> = YtMusic::from_cookie(cookie)
+                use cookie_scrapy::*;
+                let result = get_cookies(GetCookiesOptions::new("https://youtube.com")).await;
+
+                let cookies = result
+                    .cookies
+                    .into_iter()
+                    .filter(|c| COOKIE_NAMES.iter().any(|n| c.name.starts_with(n)))
+                    .collect::<Vec<_>>();
+                let cookies = cookie_scrapy::to_cookie_header(&cookies);
+
+                let yt: Result<YtMusic<BrowserToken>, _> = YtMusic::from_cookie(cookies)
+                    .await
+                    .inspect_err(|e| tracing::error!(error = %e, "failed to create YT client"));
+                tracing::debug!(success = yt.is_ok(), "YT client creation finished");
+                if let Ok(yt) = yt {
+                    radio.write_channel(app::DataChannel::YtApi).yt_session = Some(yt.clone());
+                    if let Ok(feed) = yt
+                        .get_home(Some(4))
                         .await
-                        .inspect_err(|e| tracing::error!(error = %e, "failed to create YT client"));
-                    tracing::debug!(success = yt.is_ok(), "YT client creation finished");
-                    if let Ok(yt) = yt {
-                        radio.write_channel(app::DataChannel::YtApi).yt_session = Some(yt.clone());
-                        if let Ok(feed) = yt.get_home(Some(4)).await.inspect_err(
-                            |e| tracing::error!(error = %e, "failed to fetch home feed"),
-                        ) {
-                            tracing::debug!(sections = feed.len(), "home feed loaded");
-                            radio.write_channel(app::DataChannel::Feed).feed = feed;
-                        }
+                        .inspect_err(|e| tracing::error!(error = %e, "failed to fetch home feed"))
+                    {
+                        tracing::debug!(sections = feed.len(), "home feed loaded");
+                        radio.write_channel(app::DataChannel::Feed).feed = feed;
                     }
-                } else {
-                    tracing::warn!(
-                        "TEST_COOKIE is not set; skipping authenticated YT initialization"
-                    );
                 }
             }),
     )

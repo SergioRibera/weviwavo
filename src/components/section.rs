@@ -83,7 +83,7 @@ impl Component for Section {
             })
         });
         let get_scroll = use_state(|| Callback::new(move |_| {
-            println!("Get Scroll");
+            // println!("Get Scroll");
             *scroll_position.read()
         }));
 

@@ -17,12 +17,15 @@ eula = false
 [lib]
 crate-type = ["cdylib"]
 
+[workspace]
+members = ["crates/*"]
+
 [dependencies]
 freya = { version = "0.4.0-rc.6", features = [
+cookie-scrapy = { path = "./crates/cookie-scrapy" }
     "remote-asset",
     "router",
     "radio",
-    # "webview",
     "icons",
     "hotreload",
 ] }
