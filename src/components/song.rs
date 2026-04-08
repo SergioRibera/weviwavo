@@ -213,7 +213,7 @@ impl Component for SongInfo {
                         Cursor::set(CursorIcon::Default);
                         hover.set(false);
                     })
-                    .on_secondary_press(move |_| ContextMenu::open(Menu::new()))
+                    .on_secondary_down(move |_| ContextMenu::open(Menu::new()))
                     .child(
                         ImageViewer::new(Uri::from_str(self.thumbnail.as_str()).unwrap())
                             .expanded()

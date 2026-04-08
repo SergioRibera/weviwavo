@@ -14,13 +14,7 @@ pub struct MainApp {
     pub radio: RadioStation<Data, DataChannel>,
 }
 
-impl Into<AppComponent> for MainApp {
-    fn into(self) -> AppComponent {
-        AppComponent::new(self)
-    }
-}
-
-impl Component for MainApp {
+impl App for MainApp {
     fn render(&self) -> impl IntoElement {
         use_share_radio(move || self.radio);
         use_init_root_theme(|| PreferredTheme::Dark.to_theme());

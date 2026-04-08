@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use freya::prelude::*;
-use ytmapi_rs::common::YoutubeID;
 use ytmapi_rs::parse::ParsedSongArtist;
 
 #[derive(Clone)]
@@ -74,15 +73,14 @@ impl TextInfo {
     /// Get inline elements for use in a paragraph
     pub fn get_inline_elements(
         &self,
-        on_click: impl Fn(String) + 'static + Clone,
+        _on_click: impl Fn(String) + 'static + Clone,
     ) -> Vec<Span<'static>> {
         match &self.ty {
             TextInfoType::None => vec![],
             TextInfoType::Plain(txt) => {
                 vec![Span::new(txt.clone())]
             }
-            TextInfoType::Clickable { text: txt, id } => {
-                let id = id.clone();
+            TextInfoType::Clickable { text: txt, id: _ } => {
                 vec![
                     Span::new(txt.clone()),
                     // TODO: implement on press
@@ -106,8 +104,7 @@ impl TextInfo {
 
                     // Add author name
                     if let Some(id) = &author.id {
-                        let id_str = id.get_raw().to_string();
-                        let on_click = on_click.clone();
+                        let _ = id;
                         elements.push(
                             Span::new(author.name.clone()),
                             // TODO: implement on press
