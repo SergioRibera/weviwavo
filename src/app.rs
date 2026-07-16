@@ -1,6 +1,6 @@
 use freya::{prelude::*, radio::*};
 
-use crate::components::Section;
+use crate::components::{PlayerBar, Section};
 
 mod data;
 
@@ -14,7 +14,7 @@ pub struct MainApp {
 impl App for MainApp {
     fn render(&self) -> impl IntoElement {
         use_share_radio(move || self.radio);
-        use_init_root_theme(|| PreferredTheme::Dark.to_theme());
+        use_init_theme(|| PreferredTheme::Dark.to_theme());
         let radio = use_radio::<Data, DataChannel>(DataChannel::Feed);
         let radio = radio.read();
         let bg_image = ("bg_image", include_bytes!("../resources/bg_default.webp"));
@@ -33,7 +33,7 @@ impl App for MainApp {
                 rect()
                     .child(
                         ImageViewer::new(bg_image).child(
-                            rect().expanded().background_linear_gradient(
+                            rect().expanded().offset_y(-5.).background(
                                 LinearGradient::new().stops([
                                     GradientStop::new(Color::TRANSPARENT, 0.0),
                                     GradientStop::new(Color::BLACK, 80.0),
@@ -72,5 +72,6 @@ impl App for MainApp {
                         ),
                 ),
             )
+            .child(PlayerBar::default())
     }
 }

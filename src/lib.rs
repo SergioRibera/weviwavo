@@ -5,6 +5,7 @@
 use freya::prelude::*;
 
 mod app;
+mod audio;
 mod auth;
 mod components;
 mod dialog;

@@ -3,15 +3,20 @@ use std::str::FromStr;
 use freya::animation::*;
 use freya::icons::lucide::{audio_lines, play};
 use freya::prelude::*;
+use freya::radio::use_radio;
 use ytmapi_rs::common::{Thumbnail, YoutubeID};
 use ytmapi_rs::parse::HomeContent;
 
 use super::TextInfo;
+use crate::app::{Data, DataChannel};
+use crate::audio::{AudioCommand, AudioQuality};
 
 #[derive(Clone, PartialEq)]
 pub struct SongInfo {
     id: String,
     title: String,
+    artist: String,
+    album: String,
     left: TextInfo,
     details: Option<TextInfo>,
     is_album: bool,
@@ -65,6 +70,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                 Self {
                     id: v.album_id.get_raw().to_string(),
                     title: v.title.clone(),
+                    artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: String::new(),
                     left,
                     details: v.year.as_ref().map(|y| TextInfo::plain(y.clone(), None)),
                     is_album: true,
@@ -91,6 +98,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                 Self {
                     id: v.playlist_id.get_raw().to_string(),
                     title: v.title.clone(),
+                    artist: v.author.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: String::new(),
                     left,
                     details,
                     is_album: false,
@@ -105,6 +114,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                 Self {
                     id: v.playlist_id.get_raw().to_string(),
                     title: v.title.clone(),
+                    artist: String::new(),
+                    album: String::new(),
                     left,
                     details: None,
                     is_album: true,
@@ -116,6 +127,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
             HomeContent::Artist(v) => Self {
                 id: v.channel_id.get_raw().to_string(),
                 title: v.title.clone(),
+                artist: String::new(),
+                album: String::new(),
                 left: TextInfo::none(),
                 details: v.subscribers.as_ref().map(|s| {
                     TextInfo::plain(format!("{s} de suscriptores"), Some(TextAlign::Center))
@@ -143,6 +156,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                 Self {
                     id: v.video_id.get_raw().to_string(),
                     title: v.title.clone(),
+                    artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    album: v.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
                     left,
                     details,
                     is_album: false,
@@ -154,6 +169,8 @@ impl<'a> From<&'a HomeContent> for SongInfo {
             HomeContent::Video(v) => Self {
                 id: v.video_id.get_raw().to_string(),
                 title: v.title.clone(),
+                artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                album: String::new(),
                 left: if !v.artists.is_empty() {
                     TextInfo::authors(v.artists.clone())
                 } else {
@@ -173,6 +190,14 @@ impl Component for SongInfo {
     fn render(&self) -> impl IntoElement {
         let mut is_playing = use_state(|| false);
         let mut hover = use_state(|| false);
+        let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
+        let audio_cmd = audio_radio.read().audio_cmd.clone();
+
+        let video_id = self.id.clone();
+        let song_title = self.title.clone();
+        let song_artist = self.artist.clone();
+        let song_album = self.album.clone();
+        let song_thumbnail = self.thumbnail.clone();
 
         let size = if self.is_video { 402. } else { 223. };
         let height = 223.;
@@ -227,9 +252,25 @@ impl Component for SongInfo {
                                     .on_press({
                                         let is_album = self.is_album;
                                         let is_artist = self.is_artist;
+                                        let audio_cmd = audio_cmd.clone();
+                                        let video_id = video_id.clone();
+                                        let title = song_title.clone();
+                                        let artist = song_artist.clone();
+                                        let album = song_album.clone();
+                                        let thumbnail_url = song_thumbnail.clone();
                                         move |_| {
                                             if !is_album && !is_artist {
-                                                is_playing.toggle()
+                                                is_playing.toggle();
+                                                if let Some(tx) = audio_cmd.clone() {
+                                                    tx.try_send(AudioCommand::Play {
+                                                        video_id: video_id.clone(),
+                                                        quality: AudioQuality::Medium,
+                                                        title: title.clone(),
+                                                        artist: artist.clone(),
+                                                        album: album.clone(),
+                                                        thumbnail_url: thumbnail_url.clone(),
+                                                    }).ok();
+                                                }
                                             }
                                         }
                                     })
@@ -261,7 +302,27 @@ impl Component for SongInfo {
                                         .height(album_play_size)
                                         .rounded_full()
                                         .padding(12.)
-                                        .on_press(move |_| is_playing.toggle())
+                                        .on_press({
+                                            let audio_cmd = audio_cmd.clone();
+                                            let video_id = video_id.clone();
+                                            let title = song_title.clone();
+                                            let artist = song_artist.clone();
+                                            let album = song_album.clone();
+                                            let thumbnail_url = song_thumbnail.clone();
+                                            move |_| {
+                                                is_playing.toggle();
+                                                if let Some(tx) = audio_cmd.clone() {
+                                                    tx.try_send(AudioCommand::Play {
+                                                        video_id: video_id.clone(),
+                                                        quality: AudioQuality::Medium,
+                                                        title: title.clone(),
+                                                        artist: artist.clone(),
+                                                        album: album.clone(),
+                                                        thumbnail_url: thumbnail_url.clone(),
+                                                    }).ok();
+                                                }
+                                            }
+                                        })
                                         .on_pointer_enter(move |_| {
                                             anim_album_play.start();
                                         })

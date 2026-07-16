@@ -50,6 +50,7 @@ pub async fn get_cookies(options: GetCookiesOptions) -> GetCookiesResult {
         )),
         Box::pin(get_cookies_from_firefox(
             FirefoxOptions {
+                name: "Firefox".into(),
                 profile: options.firefox_profile.clone(),
                 include_expired: options.include_expired,
                 root_path: firefox_root_path(),
@@ -59,6 +60,7 @@ pub async fn get_cookies(options: GetCookiesOptions) -> GetCookiesResult {
         )),
         Box::pin(get_cookies_from_firefox(
             FirefoxOptions {
+                name: "Zen".into(),
                 profile: options.firefox_profile.clone(),
                 include_expired: options.include_expired,
                 root_path: zen_root_path(),

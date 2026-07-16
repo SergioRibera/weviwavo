@@ -33,24 +33,16 @@
           freetype
           pkgs.stdenv.cc.cc.lib
           rustPlatform.bindgenHook
-          xorg.libX11
-          xorg.libxcb
+          libx11
+          libxcb
           libxkbcommon
           openssl
-
-          gtk3
-          glib
-          cairo
-          gdk-pixbuf
-          libsoup_3
-          pango
-          atk
-          webkitgtk_4_1
-          xdotool
 
           wayland
 
           vulkan-loader
+
+          alsa-lib
         ];
 
         appPkg = (pkgs.rustPlatform.buildRustPackage.override { stdenv = pkgs.clangStdenv; }) (finalAttrs: {
@@ -149,16 +141,6 @@
             llvmPackages.bintools
           ];
           LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath libraries}";
-          
-          shellHook = ''
-            if [ -f .env ]; then
-              set -a
-              source .env
-              set +a
-            else
-              echo "No .env file found"
-            fi
-          '';
         };
       }
     );

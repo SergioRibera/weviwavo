@@ -109,6 +109,7 @@ pub async fn get_cookies_from_firefox(
 
 #[derive(Debug, Default)]
 pub struct FirefoxOptions {
+    pub name: String,
     pub profile: Option<String>,
     pub include_expired: Option<bool>,
     pub root_path: Option<PathBuf>,
