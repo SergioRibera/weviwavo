@@ -172,10 +172,11 @@ impl<'a> From<&'a HomeContent> for SongInfo {
 impl Component for SongInfo {
     fn render(&self) -> impl IntoElement {
         let mut is_playing = use_state(|| false);
-        let size = use_state(|| if self.is_video { 402. } else { 223. });
-        let height = use_state(|| 223.);
-        let play_btn_size = use_state(|| 48.);
         let mut hover = use_state(|| false);
+
+        let size = if self.is_video { 402. } else { 223. };
+        let height = 223.;
+        let play_btn_size = 48.;
 
         let mut anim_album_play = use_animation(|_| {
             (
@@ -196,14 +197,14 @@ impl Component for SongInfo {
         rect()
             .vertical()
             .spacing(12.)
-            .max_width(Size::px(size()))
+            .max_width(Size::px(size))
             .child(
                 rect()
                     .expanded()
                     .center()
-                    .width(Size::px(size()))
-                    .height(Size::px(height()))
-                    .corner_radius(if self.is_artist { size() } else { 8. })
+                    .width(Size::px(size))
+                    .height(Size::px(height))
+                    .corner_radius(if self.is_artist { size } else { 8. })
                     .overflow(Overflow::Clip)
                     .on_pointer_enter(move |_| {
                         Cursor::set(CursorIcon::Pointer);
@@ -215,7 +216,7 @@ impl Component for SongInfo {
                     })
                     .on_secondary_down(move |_| ContextMenu::open(Menu::new()))
                     .child(
-                        ImageViewer::new(Uri::from_str(self.thumbnail.as_str()).unwrap())
+                        ImageViewer::new(Url::from_str(self.thumbnail.as_str()).unwrap())
                             .expanded()
                             .center()
                             .image_cover(ImageCover::Center)
@@ -241,15 +242,15 @@ impl Component for SongInfo {
                                     ))
                                     .maybe_child(
                                         (!self.is_album && !self.is_artist).then_some(
-                                            svg(if *is_playing.read() {
+                                            SvgViewer::new(if *is_playing.read() {
                                                 audio_lines()
                                             } else {
                                                 play()
                                             })
                                             .fill(Color::WHITE)
                                             .color(Color::WHITE)
-                                            .width(Size::px(play_btn_size()))
-                                            .height(Size::px(play_btn_size())),
+                                            .width(Size::px(play_btn_size))
+                                            .height(Size::px(play_btn_size)),
                                         ),
                                     ),
                             )
@@ -270,7 +271,7 @@ impl Component for SongInfo {
                                         .position(Position::new_absolute().bottom(8.).right(8.))
                                         .background(album_play_color)
                                         .child(
-                                            svg(if *is_playing.read() {
+                                            SvgViewer::new(if *is_playing.read() {
                                                 audio_lines()
                                             } else {
                                                 play()
@@ -287,7 +288,7 @@ impl Component for SongInfo {
                 rect()
                     .vertical()
                     .spacing(2.)
-                    .width(Size::px(size()))
+                    .width(Size::px(size))
                     .child(
                         label()
                             .max_lines(1)
@@ -307,8 +308,7 @@ impl Component for SongInfo {
                             .color(Color::from_hex("#B3B3B3").unwrap())
                             .overflow(Overflow::Clip)
                             .child(self.render_info(|id| {
-                                // Handle click here
-                                println!("Clicked on: {id}");
+                                tracing::debug!(id, "content item clicked");
                             })),
                     ),
             )

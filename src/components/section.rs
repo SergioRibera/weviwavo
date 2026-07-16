@@ -1,11 +1,10 @@
 use std::ops::Deref;
 use std::str::FromStr;
 
-use freya::icons::lucide::{chevron_left, chevron_right};
 use freya::{animation::*, prelude::*};
 use ytmapi_rs::parse::HomeSection;
 
-use super::SongInfo;
+use super::{SongInfo, scroll_button, ScrollDir};
 
 #[derive(PartialEq)]
 pub struct Section {
@@ -69,7 +68,6 @@ impl Component for Section {
         let mut scroll_position = use_state(|| (0i32, 0i32));
         let on_scroll = use_state(|| {
             Callback::new(move |ev: ScrollEvent| {
-                println!("On Scroll");
                 let current = *scroll_position.read();
                 match ev {
                     ScrollEvent::X(x) => {
@@ -82,10 +80,9 @@ impl Component for Section {
                 current != *scroll_position.read()
             })
         });
-        let get_scroll = use_state(|| Callback::new(move |_| {
-            // println!("Get Scroll");
-            *scroll_position.read()
-        }));
+        let get_scroll = use_state(|| {
+            Callback::new(move |_| *scroll_position.read())
+        });
 
         let scroll_controller = use_hook(|| {
             ScrollController::managed(
@@ -122,8 +119,6 @@ impl Component for Section {
         let (current_x, _) = *scroll_position.read();
         let can_scroll_left = current_x > 0;
 
-        // Estimate max scroll based on content
-        // Assuming viewport shows ~4-5 items at once
         let max_scroll = (content_len as i32 * scroll_amount).saturating_sub(scroll_amount * 4);
         let can_scroll_right = current_x < max_scroll && content_len > 4;
 
@@ -156,7 +151,7 @@ impl Component for Section {
                                     .height(Size::px(56.))
                                     .overflow(Overflow::Clip)
                                     .child(
-                                        ImageViewer::new(Uri::from_str(t.url.as_str()).unwrap())
+                                        ImageViewer::new(Url::from_str(t.url.as_str()).unwrap())
                                             .expanded()
                                             .center()
                                             .image_cover(ImageCover::Center),
@@ -184,66 +179,16 @@ impl Component for Section {
                     )
                     .child(
                         rect().horizontal().spacing(12.).children([
-                            // Left scroll button
-                            rect()
-                                .rounded_full()
-                                .padding(Gaps::new_all(8.))
-                                .cross_align(Alignment::Center)
-                                .main_align(Alignment::Center)
-                                .width(Size::px(40.))
-                                .height(Size::px(40.))
-                                .border(Some(Border::new().width(2.).fill(if can_scroll_left {
-                                    Color::WHITE
-                                } else {
-                                    Color::from_hex("#404040").unwrap()
-                                })))
-                                .on_press(move |_| {
-                                    if can_scroll_left {
-                                        let new_x = (current_x - scroll_amount).max(0);
-                                        scroll_position.write().0 = new_x;
-                                    }
-                                })
-                                .child(
-                                    svg(chevron_left())
-                                        .color(if can_scroll_left {
-                                            Color::WHITE
-                                        } else {
-                                            Color::from_hex("#404040").unwrap()
-                                        })
-                                        .width(Size::px(24.))
-                                        .height(Size::px(24.)),
-                                )
-                                .into_element(),
-                            // Right scroll button
-                            rect()
-                                .rounded_full()
-                                .padding(Gaps::new_all(8.))
-                                .cross_align(Alignment::Center)
-                                .main_align(Alignment::Center)
-                                .width(Size::px(40.))
-                                .height(Size::px(40.))
-                                .border(Some(Border::new().width(2.).fill(if can_scroll_right {
-                                    Color::WHITE
-                                } else {
-                                    Color::from_hex("#404040").unwrap()
-                                })))
-                                .on_press(move |_| {
-                                    if can_scroll_right {
-                                        let new_x = current_x + scroll_amount;
-                                        scroll_position.write().0 = new_x;
-                                    }
-                                })
-                                .child(
-                                    svg(chevron_right())
-                                        .color(if can_scroll_right {
-                                            Color::WHITE
-                                        } else {
-                                            Color::from_hex("#404040").unwrap()
-                                        })
-                                        .width(Size::px(24.))
-                                        .height(Size::px(24.)),
-                                )
-                                .into_element(),
+                            scroll_button(ScrollDir::Left, can_scroll_left, move || {
+                                let new_x = (current_x - scroll_amount).max(0);
+                                scroll_position.write().0 = new_x;
+                            })
+                            .into_element(),
+                            scroll_button(ScrollDir::Right, can_scroll_right, move || {
+                                let new_x = current_x + scroll_amount;
+                                scroll_position.write().0 = new_x;
+                            })
+                            .into_element(),
                         ]),
                     ),
             )

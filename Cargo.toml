@@ -21,8 +21,8 @@ crate-type = ["cdylib"]
 members = ["crates/*"]
 
 [dependencies]
-freya = { version = "0.4.0-rc.6", features = [
 cookie-scrapy = { path = "./crates/cookie-scrapy" }
+freya = { version = "0.4.0", features = [
     "remote-asset",
     "router",
     "radio",
@@ -33,11 +33,10 @@ tokio = { version = "1.49", default-features = false, features = [
     "macros",
     "rt-multi-thread",
 ] }
-# freya = { path = "../../contributions/freya/crates/freya/", features = ["remote-asset", "hotreload"] }
-# freya-radio = { path = "../../contributions/freya/crates/freya-radio/", features = ["tracing"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "5"
 # ytmapi-rs = { path = "../../contributions/youtui/ytmapi-rs/", default-features = false, features = [
 #     "rustls-tls",
 #     "simplified-queries",
