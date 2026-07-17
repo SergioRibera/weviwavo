@@ -200,22 +200,60 @@ fn trace_delegation_nfunc(player_js: &str, gyk_body: &str, gyk_pos: usize) -> Op
     ))
     .ok()?;
     // Use the LAST match before gyk_pos (rfind semantics via find_iter + last).
-    let h_match = h_arr_re
+    let h_matches: Vec<_> = h_arr_re
         .find_iter(search_region)
         .filter(|m| window_start + m.start() < gyk_pos)
-        .last()?;
+        .collect();
+    tracing::debug!(
+        count = h_matches.len(),
+        h_name,
+        window_kb = 120,
+        "H array search results"
+    );
+    let h_match = match h_matches.into_iter().last() {
+        Some(m) => m,
+        None => {
+            tracing::warn!(h_name, "H array not found in 120 KB window before g.yk");
+            return None;
+        }
+    };
     let h_abs = window_start + h_match.start();
-    let h_bracket = h_abs + player_js[h_abs..].find('[')?;
-    let h_close = find_closing(player_js, h_bracket + 1, '[', ']')?;
+    let h_bracket = match player_js[h_abs..].find('[') {
+        Some(off) => h_abs + off,
+        None => {
+            tracing::warn!("H array bracket not found");
+            return None;
+        }
+    };
+    let h_close = match find_closing(player_js, h_bracket + 1, '[', ']') {
+        Some(c) => c,
+        None => {
+            tracing::warn!("H array closing bracket not found");
+            return None;
+        }
+    };
     let h_contents = &player_js[h_bracket + 1..h_close];
+    tracing::debug!(
+        preview = &h_contents[..h_contents.len().min(300)],
+        len = h_contents.len(),
+        "H array contents"
+    );
 
     // Take the h_idx'th element directly (don't filter — that would shift indices).
-    let nn_idx: usize = h_contents
-        .split(',')
-        .nth(h_idx)?
-        .trim()
-        .parse()
-        .ok()?;
+    let h_element = match h_contents.split(',').nth(h_idx) {
+        Some(e) => e.trim().to_owned(),
+        None => {
+            tracing::warn!(h_idx, elements = h_contents.split(',').count(), "H[h_idx] out of range");
+            return None;
+        }
+    };
+    let nn_idx: usize = match h_element.parse() {
+        Ok(n) => n,
+        Err(_) => {
+            tracing::warn!(h_element, h_idx, "H[h_idx] is not a plain integer");
+            return None;
+        }
+    };
 
     tracing::debug!(nn_idx, "resolved H[{h_idx}] = {nn_idx}");
 
@@ -225,23 +263,39 @@ fn trace_delegation_nfunc(player_js: &str, gyk_body: &str, gyk_pos: usize) -> Op
         regex::escape(&nn_name)
     ))
     .ok()?;
-    let nn_match = nn_arr_re
+    let nn_matches: Vec<_> = nn_arr_re
         .find_iter(search_region)
         .filter(|m| window_start + m.start() < gyk_pos)
-        .last()?;
+        .collect();
+    tracing::debug!(count = nn_matches.len(), nn_name, "nN array search results");
+    let nn_match = match nn_matches.into_iter().last() {
+        Some(m) => m,
+        None => {
+            tracing::warn!(nn_name, "nN array not found in 120 KB window before g.yk");
+            return None;
+        }
+    };
     let nn_abs = window_start + nn_match.start();
     let nn_bracket = nn_abs + player_js[nn_abs..].find('[')?;
     let nn_close = find_closing(player_js, nn_bracket + 1, '[', ']')?;
     let nn_contents = &player_js[nn_bracket + 1..nn_close];
 
     let func_re = Regex::new(r"function\s*(?:[a-zA-Z0-9$_]*)?\s*\(").ok()?;
-    let nth = func_re.find_iter(nn_contents).nth(nn_idx)?;
+    let func_count = func_re.find_iter(nn_contents).count();
+    tracing::debug!(func_count, nn_idx, "functions found in nN array");
+    let nth = match func_re.find_iter(nn_contents).nth(nn_idx) {
+        Some(m) => m,
+        None => {
+            tracing::warn!(nn_idx, func_count, "nn_idx out of range in nN array");
+            return None;
+        }
+    };
     let brace_rel = nn_contents[nth.start()..].find('{')?;
     let brace_start = nth.start() + brace_rel;
     let brace_close = find_closing(nn_contents, brace_start + 1, '{', '}')?;
     let func_src = &nn_contents[nth.start()..=brace_close];
 
-    tracing::debug!(len = func_src.len(), "actual transform function extracted from nN[{nn_idx}]");
+    tracing::debug!(len = func_src.len(), nn_idx, "actual transform function extracted from nN[{nn_idx}]");
 
     // The transform function often references a helper object for its operations.
     let js = if let Some(helper) = extract_nfunc_helper_obj(player_js, func_src) {
@@ -413,6 +467,27 @@ pub async fn signature_timestamp() -> u32 {
     player_info().await.sig_timestamp
 }
 
+fn format_js_exception(ctx: &rquickjs::Ctx<'_>) -> String {
+    let exc = ctx.catch();
+    if let Some(s) = exc.as_string().and_then(|s| s.to_string().ok()) {
+        return s;
+    }
+    if let Some(obj) = exc.as_object() {
+        let msg = obj
+            .get::<_, rquickjs::Value>("message")
+            .ok()
+            .and_then(|v| v.as_string().and_then(|s| s.to_string().ok()))
+            .unwrap_or_default();
+        let stack = obj
+            .get::<_, rquickjs::Value>("stack")
+            .ok()
+            .and_then(|v| v.as_string().and_then(|s| s.to_string().ok()))
+            .unwrap_or_default();
+        return format!("{msg}\n{stack}");
+    }
+    format!("{exc:?}")
+}
+
 // Browser API stubs injected into QuickJS before any player JS runs.
 // QuickJS provides a minimal ES runtime with no DOM/BOM globals.
 const BROWSER_STUBS: &str = r#"
@@ -488,17 +563,33 @@ async fn decrypt_nsig(encrypted: &str) -> Option<String> {
             }
 
             let n_json = serde_json::to_string(&encrypted).ok()?;
-            let code = if is_qwo_style {
-                format!("{nfunc}\n__nfunc({n_json})")
+
+            if is_qwo_style {
+                // Step 1: eval the setup code (defines __nfunc and its dependencies).
+                if let Err(e) = ctx.eval::<rquickjs::Value, _>(nfunc.as_str()) {
+                    let exc_detail = format_js_exception(&ctx);
+                    tracing::warn!(error = %e, exc_detail, "QuickJS failed during nfunc setup");
+                    return None;
+                }
+                // Step 2: call __nfunc with the encrypted n param.
+                let call = format!("__nfunc({n_json})");
+                match ctx.eval::<rquickjs::Value, _>(call.as_str()) {
+                    Ok(v) => v.as_string().and_then(|s| s.to_string().ok()),
+                    Err(e) => {
+                        let exc_detail = format_js_exception(&ctx);
+                        tracing::warn!(error = %e, exc_detail, "QuickJS failed calling __nfunc");
+                        None
+                    }
+                }
             } else {
-                format!("({nfunc})({n_json})")
-            };
-            let result = ctx.eval::<rquickjs::Value, _>(code.as_str());
-            match result {
-                Ok(v) => v.as_string().and_then(|s| s.to_string().ok()),
-                Err(e) => {
-                    tracing::warn!(error = %e, is_qwo_style, "QuickJS eval error in nfunc");
-                    None
+                let code = format!("({nfunc})({n_json})");
+                match ctx.eval::<rquickjs::Value, _>(code.as_str()) {
+                    Ok(v) => v.as_string().and_then(|s| s.to_string().ok()),
+                    Err(e) => {
+                        let exc_detail = format_js_exception(&ctx);
+                        tracing::warn!(error = %e, exc_detail, "QuickJS eval error in nfunc");
+                        None
+                    }
                 }
             }
         })
