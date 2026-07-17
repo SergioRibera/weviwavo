@@ -43,6 +43,7 @@ enum RodioCmd {
 #[derive(Default)]
 struct ProgressState {
     current_secs: f32,
+    total_secs: f32,
 }
 
 /// Handle for sending commands to the audio engine.
@@ -107,11 +108,13 @@ pub async fn run_audio_engine(
                 }
             }
             _ = progress_ticker.tick() => {
-                let current = progress.lock().map(|p| p.current_secs).unwrap_or(0.);
-                radio
-                    .write_channel(DataChannel::Player)
-                    .player
-                    .current_secs = current;
+                let (current, total) = progress
+                    .lock()
+                    .map(|p| (p.current_secs, p.total_secs))
+                    .unwrap_or((0., 0.));
+                let mut state = radio.write_channel(DataChannel::Player);
+                state.player.current_secs = current;
+                state.player.total_secs = total;
             }
         }
     }
@@ -200,9 +203,15 @@ fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<Pro
                 let cursor = Cursor::new(bytes);
                 match Decoder::new(cursor) {
                     Ok(source) => {
+                        let total = source
+                            .total_duration()
+                            .map(|d| d.as_secs_f32())
+                            .unwrap_or(0.);
+                        if let Ok(mut p) = progress.lock() {
+                            p.total_secs = total;
+                            p.current_secs = 0.;
+                        }
                         let progress_clone = Arc::clone(&progress);
-                        // track_position wraps the source so the closure receives
-                        // &mut TrackPosition<…> which exposes get_pos().
                         let source = source.track_position().periodic_access(
                             PROGRESS_INTERVAL,
                             move |s| {
@@ -214,7 +223,7 @@ fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<Pro
                         );
                         player.append(source);
                         player.play();
-                        info!("playback started");
+                        info!("playback started, total={total:.1}s");
                     }
                     Err(e) => error!(error = %e, "audio decode failed"),
                 }

@@ -15,14 +15,12 @@ impl App for MainApp {
     fn render(&self) -> impl IntoElement {
         use_share_radio(move || self.radio);
         use_init_theme(|| PreferredTheme::Dark.to_theme());
-        let radio = use_radio::<Data, DataChannel>(DataChannel::Feed);
-        let radio = radio.read();
+        let feed_radio = use_radio::<Data, DataChannel>(DataChannel::Feed);
+        let player_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
+        let radio = feed_radio.read();
+        let has_player = !player_radio.read().player.title.is_empty();
         let bg_image = ("bg_image", include_bytes!("../resources/bg_default.webp"));
         let platform = Platform::get().root_size;
-        //
-        // let on_press = move |_| {
-        //     radio.write().lists.push(Vec::default());
-        // };
 
         rect()
             .vertical()
@@ -72,6 +70,6 @@ impl App for MainApp {
                         ),
                 ),
             )
-            .child(PlayerBar::default())
+            .maybe_child(has_player.then(PlayerBar::default))
     }
 }

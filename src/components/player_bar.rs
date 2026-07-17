@@ -3,7 +3,7 @@ use std::str::FromStr;
 use bytes::Bytes;
 use freya::icons::lucide::{
     audio_lines, chevron_up, ellipsis_vertical, play, repeat, shuffle, skip_back, skip_forward,
-    thumbs_down, thumbs_up, volume_2,
+    thumbs_down, thumbs_up, volume_2, volume_x,
 };
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -61,6 +61,10 @@ impl Component for PlayerBar {
         let thumbnail_url = p.thumbnail_url.clone();
         let audio_cmd = state.audio_cmd.clone();
 
+        let mut is_muted = use_state(|| false);
+
+        let seekbar_width = Platform::get().root_size.read().width;
+
         let progress_pct = if total_secs > 0. {
             (current_secs / total_secs * 100.).clamp(0., 100.)
         } else {
@@ -82,18 +86,33 @@ impl Component for PlayerBar {
             .width(Size::Fill)
             .background(Color::from_hex("#0F0F0F").unwrap())
             // seek bar
-            .child(
+            .child({
+                let audio_cmd = audio_cmd.clone();
                 rect()
                     .width(Size::Fill)
                     .height(Size::px(3.))
                     .background(Color::from_hex("#2D2D2D").unwrap())
+                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                    .on_press(move |e: Event<PressEventData>| {
+                        let x = match e.data() {
+                            PressEventData::Mouse(m) => m.element_location.x as f32,
+                            PressEventData::Touch(t) => t.element_location.x as f32,
+                            PressEventData::Keyboard(_) => return,
+                        };
+                        let pct = (x / seekbar_width as f32).clamp(0., 1.);
+                        let seek_to = pct * total_secs;
+                        if let Some(tx) = audio_cmd.clone() {
+                            tx.try_send(AudioCommand::Seek(seek_to)).ok();
+                        }
+                    })
                     .child(
                         rect()
                             .width(Size::percent(progress_pct))
                             .height(Size::Fill)
                             .background(Color::from_hex("#FF0000").unwrap()),
-                    ),
-            )
+                    )
+            })
             // main row
             .child(
                 rect()
@@ -108,7 +127,27 @@ impl Component for PlayerBar {
                             .horizontal()
                             .spacing(4.)
                             .cross_align(Alignment::Center)
-                            .child(icon_btn(skip_back(), 20.))
+                            .child({
+                                let audio_cmd = audio_cmd.clone();
+                                rect()
+                                    .center()
+                                    .padding(Gaps::new_all(6.))
+                                    .rounded_full()
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .on_press(move |_| {
+                                        let Some(tx) = audio_cmd.clone() else { return };
+                                        let seek_to = (current_secs - 10.).max(0.);
+                                        tx.try_send(AudioCommand::Seek(seek_to)).ok();
+                                    })
+                                    .child(
+                                        SvgViewer::new(skip_back())
+                                            .color(Color::WHITE)
+                                            .fill(Color::WHITE)
+                                            .width(Size::px(20.))
+                                            .height(Size::px(20.)),
+                                    )
+                            })
                             .child(
                                 rect()
                                     .center()
@@ -118,14 +157,17 @@ impl Component for PlayerBar {
                                     .border(Some(Border::new().width(1.5).fill(Color::WHITE)))
                                     .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
                                     .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                                    .on_press(move |_| {
-                                        let Some(tx) = audio_cmd.clone() else { return };
-                                        let cmd = if is_playing {
-                                            AudioCommand::Pause
-                                        } else {
-                                            AudioCommand::Resume
-                                        };
-                                        tx.try_send(cmd).ok();
+                                    .on_press({
+                                        let audio_cmd = audio_cmd.clone();
+                                        move |_| {
+                                            let Some(tx) = audio_cmd.clone() else { return };
+                                            let cmd = if is_playing {
+                                                AudioCommand::Pause
+                                            } else {
+                                                AudioCommand::Resume
+                                            };
+                                            tx.try_send(cmd).ok();
+                                        }
                                     })
                                     .child(
                                         SvgViewer::new(if is_playing {
@@ -139,7 +181,27 @@ impl Component for PlayerBar {
                                         .height(Size::px(18.)),
                                     ),
                             )
-                            .child(icon_btn(skip_forward(), 20.))
+                            .child({
+                                let audio_cmd = audio_cmd.clone();
+                                rect()
+                                    .center()
+                                    .padding(Gaps::new_all(6.))
+                                    .rounded_full()
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .on_press(move |_| {
+                                        let Some(tx) = audio_cmd.clone() else { return };
+                                        let seek_to = (current_secs + 30.).min(total_secs);
+                                        tx.try_send(AudioCommand::Seek(seek_to)).ok();
+                                    })
+                                    .child(
+                                        SvgViewer::new(skip_forward())
+                                            .color(Color::WHITE)
+                                            .fill(Color::WHITE)
+                                            .width(Size::px(20.))
+                                            .height(Size::px(20.)),
+                                    )
+                            })
                             .child(
                                 label()
                                     .text(format!(
@@ -205,7 +267,33 @@ impl Component for PlayerBar {
                             .horizontal()
                             .spacing(4.)
                             .cross_align(Alignment::Center)
-                            .child(icon_btn(volume_2(), 18.))
+                            .child({
+                                let audio_cmd = audio_cmd.clone();
+                                let muted = *is_muted.read();
+                                rect()
+                                    .center()
+                                    .padding(Gaps::new_all(6.))
+                                    .rounded_full()
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .on_press(move |_| {
+                                        let Some(tx) = audio_cmd.clone() else { return };
+                                        if muted {
+                                            tx.try_send(AudioCommand::SetVolume(1.0)).ok();
+                                            is_muted.set(false);
+                                        } else {
+                                            tx.try_send(AudioCommand::SetVolume(0.0)).ok();
+                                            is_muted.set(true);
+                                        }
+                                    })
+                                    .child(
+                                        SvgViewer::new(if muted { volume_x() } else { volume_2() })
+                                            .color(Color::WHITE)
+                                            .fill(Color::WHITE)
+                                            .width(Size::px(18.))
+                                            .height(Size::px(18.)),
+                                    )
+                            })
                             .child(icon_btn(repeat(), 18.))
                             .child(icon_btn(shuffle(), 18.))
                             .child(icon_btn(chevron_up(), 18.)),
