@@ -726,9 +726,9 @@ async fn decrypt_nsig(encrypted: &str) -> Option<String> {
             });
         }
 
-        // QWO-style: iteratively resolve undefined symbols up to 8 times.
+        // QWO-style: iteratively resolve undefined symbols up to 30 times.
         let mut extra_defs = String::new();
-        for attempt in 0usize..=8 {
+        for attempt in 0usize..30 {
             let (result, undef_sym) = eval_nfunc_qwo(&nfunc, &extra_defs, &n_json);
             if let Some(r) = result {
                 tracing::debug!(attempt, "nsig decrypted");
