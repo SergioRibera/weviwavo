@@ -151,14 +151,10 @@ fn extract_nfunc_via_qwo(player_js: &str) -> Option<Box<str>> {
         return Some(func_src);
     }
 
-    // Fallback: QWO fake-path trick. Use a large window so nN is likely included.
-    let chunk_start = gyk_pos.saturating_sub(60_000);
-    let chunk = &player_js[chunk_start..=qwo_close];
-
-    let js = format!(
-        r#"var g={{}};
-{chunk}
-function __nfunc(n) {{
+    // Return only the tiny wrapper. The full player JS is eval'd separately at decrypt time
+    // (stored in PlayerInfo.player_js), so all of QWO's dependencies are already in scope.
+    let wrapper = format!(
+        r#"function __nfunc(n) {{
     var fakeUrl = "https://x.invalid/n/" + encodeURIComponent(n) + "/x";
     try {{
         var result = {qwo_name}(fakeUrl);
@@ -169,8 +165,8 @@ function __nfunc(n) {{
 }}"#
     );
 
-    tracing::debug!(len = js.len(), qwo_name, "nfunc-via-QWO JS built (fallback)");
-    Some(js.into_boxed_str())
+    tracing::debug!(qwo_name, "QWO-style nfunc wrapper built");
+    Some(wrapper.into_boxed_str())
 }
 
 /// Parse `g.yk = function(N,S){ return nN[H[idx]](this,...) }` and extract the
@@ -603,101 +599,34 @@ var crypto = {
 };
 var localStorage = { getItem: function(){ return null; }, setItem: function(){}, removeItem: function(){} };
 var sessionStorage = localStorage;
+// Event listeners
+globalThis.addEventListener = function(){};
+globalThis.removeEventListener = function(){};
+globalThis.dispatchEvent = function(){ return true; };
+document.addEventListener = function(){};
+document.removeEventListener = function(){};
+document.createEvent = function(){ return {initEvent:function(){},target:null}; };
+// DOM helpers
+var screen = { width: 1920, height: 1080, colorDepth: 24, pixelDepth: 24 };
+var Image = function(){};
+var Blob = globalThis.Blob || function(parts, opts){ this.size=0; this.type=(opts&&opts.type)||''; };
+var URL = globalThis.URL || {
+    createObjectURL: function(){ return ''; },
+    revokeObjectURL: function(){},
+    parse: function(){ return null; }
+};
+var Worker = function(){ this.postMessage=function(){}; this.terminate=function(){}; };
+var MessageChannel = function(){
+    var p = { onmessage: null, postMessage: function(){} };
+    this.port1 = p; this.port2 = p;
+};
+var MutationObserver = function(cb){ this.observe=function(){}; this.disconnect=function(){}; };
+var ResizeObserver = function(cb){ this.observe=function(){}; this.disconnect=function(){}; };
+var IntersectionObserver = function(cb, opts){ this.observe=function(){}; this.disconnect=function(){}; };
+var MediaSource = { isTypeSupported: function(){ return false; } };
+var HTMLVideoElement = function(){};
+var CustomEvent = function(type, opts){ this.type=type; this.detail=(opts&&opts.detail)||null; };
 "#;
-
-/// Look up a symbol's definition in the player JS.
-/// Returns a `var SYM=VALUE;` snippet suitable for prepending to an eval context.
-fn find_sym_definition(player_js: &str, sym: &str) -> Option<String> {
-    // Named function: SYM = function(...){...}
-    if let Some(f) = extract_named_func(player_js, sym) {
-        return Some(format!("var {sym}={f};\n"));
-    }
-    // Array or object literal: SYM=[...] / SYM={...}
-    let re = Regex::new(&format!(
-        r"(?:(?:var|let|const)\s+)?\b{}\s*=\s*",
-        regex::escape(sym)
-    ))
-    .ok()?;
-    let m = re.find(player_js)?;
-    let val_start = m.end();
-    let first = player_js[val_start..].chars().next()?;
-    match first {
-        '[' => {
-            let close = find_closing(player_js, val_start + 1, '[', ']')?;
-            Some(format!("var {sym}={};\n", &player_js[val_start..=close]))
-        }
-        '{' => {
-            let close = find_closing(player_js, val_start + 1, '{', '}')?;
-            Some(format!("var {sym}={};\n", &player_js[val_start..=close]))
-        }
-        _ => {
-            // Scalar / identifier
-            let end = player_js[val_start..].find(|c: char| c == ';' || c == '\n')?;
-            let val = player_js[val_start..val_start + end].trim();
-            if val.is_empty() {
-                return None;
-            }
-            Some(format!("var {sym}={val};\n"))
-        }
-    }
-}
-
-/// One evaluation attempt for QWO-style nfunc.
-///
-/// Returns:
-/// - `(Some(result), None)` — success
-/// - `(None, Some(sym))` — undefined symbol blocking eval; add its definition and retry
-/// - `(None, None)` — fatal error
-fn eval_nfunc_qwo(nfunc: &str, extra_defs: &str, n_json: &str) -> (Option<String>, Option<String>) {
-    let Some(rt) = rquickjs::Runtime::new().ok() else {
-        return (None, None);
-    };
-    let Some(ctx) = rquickjs::Context::full(&rt).ok() else {
-        return (None, None);
-    };
-    ctx.with(|ctx| {
-        let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
-
-        let setup = format!("{extra_defs}\n{nfunc}");
-        if let Err(_) = ctx.eval::<rquickjs::Value, _>(setup.as_str()) {
-            let exc = format_js_exception(&ctx);
-            let sym = Regex::new(r"'?([a-zA-Z$_][a-zA-Z0-9$_]*)' is not defined")
-                .ok()
-                .and_then(|re| re.captures(&exc))
-                .map(|c| c[1].to_owned());
-            // Also try without quotes: "X is not defined"
-            let sym = sym.or_else(|| {
-                Regex::new(r"\b([a-zA-Z$_][a-zA-Z0-9$_]*) is not defined")
-                    .ok()
-                    .and_then(|re| re.captures(&exc))
-                    .map(|c| c[1].to_owned())
-            });
-            if sym.is_none() {
-                tracing::warn!(exc, "nfunc setup failed with non-undef error");
-            }
-            return (None, sym);
-        }
-
-        let call = format!("__nfunc({n_json})");
-        match ctx.eval::<rquickjs::Value, _>(call.as_str()) {
-            Ok(v) => {
-                let result = v
-                    .as_string()
-                    .and_then(|s| s.to_string().ok())
-                    .filter(|s| !s.is_empty());
-                if result.is_none() {
-                    tracing::warn!("__nfunc returned null or empty string");
-                }
-                (result, None)
-            }
-            Err(e) => {
-                let exc = format_js_exception(&ctx);
-                tracing::warn!(error = %e, exc, "__nfunc call failed");
-                (None, None)
-            }
-        }
-    })
-}
 
 /// Decrypt the YouTube CDN `n` throttling parameter using the player JS nfunc.
 async fn decrypt_nsig(encrypted: &str) -> Option<String> {
@@ -710,46 +639,48 @@ async fn decrypt_nsig(encrypted: &str) -> Option<String> {
         .flatten();
 
     tokio::task::spawn_blocking(move || {
-        let n_json = serde_json::to_string(&encrypted).ok()?;
+        let rt = rquickjs::Runtime::new().ok()?;
+        let ctx = rquickjs::Context::full(&rt).ok()?;
+        ctx.with(|ctx| {
+            let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
 
-        if !is_qwo {
-            // IIFE-style: self-contained, no undefined-ref resolution needed.
-            let rt = rquickjs::Runtime::new().ok()?;
-            let ctx = rquickjs::Context::full(&rt).ok()?;
-            return ctx.with(|ctx| {
-                let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
+            let n_json = serde_json::to_string(&encrypted).ok()?;
+
+            if is_qwo {
+                // QWO-style: eval the full player JS so that QWO and all its deps are
+                // in scope. Tolerate any exception — browser-API stubs cover the common
+                // ones; the rest are analytics/UI init that we don't need.
+                if let Some(ref pjs) = player_js {
+                    if let Err(_) = ctx.eval::<rquickjs::Value, _>(pjs.as_str()) {
+                        let exc = format_js_exception(&ctx);
+                        tracing::debug!(exc, "player JS threw (tolerated); continuing");
+                    }
+                }
+                // Define the small __nfunc wrapper that calls QWO.
+                if let Err(e) = ctx.eval::<rquickjs::Value, _>(nfunc.as_str()) {
+                    let exc = format_js_exception(&ctx);
+                    tracing::warn!(error = %e, exc, "failed to eval __nfunc wrapper");
+                    return None;
+                }
+                let call = format!("__nfunc({n_json})");
+                let result = ctx.eval::<rquickjs::Value, _>(call.as_str())
+                    .ok()?
+                    .as_string()
+                    .and_then(|s| s.to_string().ok())
+                    .filter(|s| !s.is_empty());
+                if result.is_none() {
+                    tracing::warn!("__nfunc returned null or empty");
+                }
+                result
+            } else {
+                // IIFE-style: self-contained function, no extra context needed.
                 let code = format!("({nfunc})({n_json})");
                 ctx.eval::<rquickjs::Value, _>(code.as_str())
                     .ok()?
                     .as_string()
                     .and_then(|s| s.to_string().ok())
-            });
-        }
-
-        // QWO-style: iteratively resolve undefined symbols up to 30 times.
-        let mut extra_defs = String::new();
-        for attempt in 0usize..30 {
-            let (result, undef_sym) = eval_nfunc_qwo(&nfunc, &extra_defs, &n_json);
-            if let Some(r) = result {
-                tracing::debug!(attempt, "nsig decrypted");
-                return Some(r);
             }
-            if let Some(sym) = undef_sym {
-                if let Some(def) = player_js.as_deref().and_then(|pjs| find_sym_definition(pjs, &sym)) {
-                    tracing::debug!(sym, attempt, "resolved undefined symbol in nfunc");
-                    // Prepend so deps are defined before what uses them.
-                    extra_defs = format!("{def}\n{extra_defs}");
-                    continue;
-                }
-                tracing::warn!(sym, attempt, "no definition found for undefined symbol");
-                return None;
-            }
-            // Fatal error — no point retrying.
-            return None;
-        }
-
-        tracing::warn!("max retries exceeded resolving nfunc dependencies");
-        None
+        })
     })
     .await
     .ok()
