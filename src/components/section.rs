@@ -44,6 +44,10 @@ enum WindowSize {
 }
 
 impl Component for Section {
+    fn render_key(&self) -> DiffKey {
+        DiffKey::from(&self.home.title)
+    }
+
     fn render(&self) -> impl IntoElement {
         let platform = Platform::get();
 
@@ -63,35 +67,7 @@ impl Component for Section {
             }
         });
 
-        let notifier = use_state(|| ());
-        let requests = use_state(|| Vec::new());
-        let mut scroll_position = use_state(|| (0i32, 0i32));
-        let on_scroll = use_state(|| {
-            Callback::new(move |ev: ScrollEvent| {
-                let current = *scroll_position.read();
-                match ev {
-                    ScrollEvent::X(x) => {
-                        scroll_position.write().0 = x;
-                    }
-                    ScrollEvent::Y(y) => {
-                        scroll_position.write().1 = y;
-                    }
-                }
-                current != *scroll_position.read()
-            })
-        });
-        let get_scroll = use_state(|| {
-            Callback::new(move |_| *scroll_position.read())
-        });
-
-        let scroll_controller = use_hook(|| {
-            ScrollController::managed(
-                notifier.clone(),
-                requests.clone(),
-                on_scroll.clone(),
-                get_scroll.clone(),
-            )
-        });
+        let mut scroll_controller = use_scroll_controller(ScrollConfig::default);
 
         let current_width = platform.root_size.read().width;
         let current_window_size = if current_width <= 1024. {
@@ -113,14 +89,24 @@ impl Component for Section {
         }
 
         let scroll_amount = 270; // 250 (item size) + 20 (spacing)
-        let content = self.contents.clone();
-        let content_len = content.len();
+        let content_len = self.contents.len();
 
-        let (current_x, _) = *scroll_position.read();
-        let can_scroll_left = current_x > 0;
+        // Freya stores scroll as negative offsets: 0 = start, -N = scrolled N px right.
+        let (current_x, _): (i32, i32) = scroll_controller.into();
+        let can_scroll_left = current_x < 0;
 
-        let max_scroll = (content_len as i32 * scroll_amount).saturating_sub(scroll_amount * 4);
-        let can_scroll_right = current_x < max_scroll && content_len > 4;
+        let max_overflow = (content_len as i32 * scroll_amount).saturating_sub(scroll_amount * 4);
+        let can_scroll_right = current_x > -max_overflow && content_len > 4;
+
+        tracing::trace!(
+            section = %self.home.title,
+            content_len,
+            current_x,
+            can_scroll_left,
+            can_scroll_right,
+            max_overflow,
+            "section render"
+        );
 
         let max_width = max_width_anim.read().value();
 
@@ -180,13 +166,13 @@ impl Component for Section {
                     .child(
                         rect().horizontal().spacing(12.).children([
                             scroll_button(ScrollDir::Left, can_scroll_left, move || {
-                                let new_x = (current_x - scroll_amount).max(0);
-                                scroll_position.write().0 = new_x;
+                                let target = (current_x + scroll_amount).min(0);
+                                scroll_controller.scroll_to_x(target);
                             })
                             .into_element(),
                             scroll_button(ScrollDir::Right, can_scroll_right, move || {
-                                let new_x = current_x + scroll_amount;
-                                scroll_position.write().0 = new_x;
+                                let target = current_x - scroll_amount;
+                                scroll_controller.scroll_to_x(target);
                             })
                             .into_element(),
                         ]),
