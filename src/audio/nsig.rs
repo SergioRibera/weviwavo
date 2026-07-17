@@ -322,18 +322,17 @@ fn extract_nfunc(player_js: &str) -> Option<Box<str>> {
         return Some(js);
     }
 
-    let call_re = Regex::new(
+    // Multiple call-site patterns for n-throttle, covering several player generations.
+    let n_call_patterns = [
         r#"\.get\("n"\)\)&&\(b=([a-zA-Z0-9$_]{1,4})(?:\[(\d+)\])?\([a-zA-Z0-9$_]+\)"#,
-    )
-    .ok()?;
-
-    let caps = call_re.captures(player_js).or_else(|| {
-        Regex::new(
-            r#"\.get\("n"\)\)&&\([a-zA-Z0-9$_]+=([a-zA-Z0-9$_]{1,4})(?:\[(\d+)\])?\([a-zA-Z0-9$_]+\)"#,
-        )
-        .ok()
-        .and_then(|re| re.captures(player_js))
-    })?;
+        r#"\.get\("n"\)\)&&\([a-zA-Z0-9$_]+=([a-zA-Z0-9$_]{1,4})(?:\[(\d+)\])?\([a-zA-Z0-9$_]+\)"#,
+        r#"n&&\(n=([a-zA-Z0-9$_]{1,4})(?:\[(\d+)\])?\(n\)"#,
+        r#"\(b=([a-zA-Z0-9$_]{1,4})\[([a-zA-Z0-9$_]{1,4})\[(\d+)\]\]\)"#,
+        r#"\.set\("n"\s*,\s*([a-zA-Z0-9$_]{1,4})(?:\[(\d+)\])?\([a-zA-Z0-9$_]+\)\)"#,
+    ];
+    let caps = n_call_patterns
+        .iter()
+        .find_map(|pat| Regex::new(pat).ok().and_then(|re| re.captures(player_js)))?;
 
     let sym = &caps[1];
     let arr_idx = caps
@@ -378,8 +377,12 @@ fn extract_sig_func(player_js: &str) -> Option<Box<str>> {
         r#"\.set\("sig"\s*,\s*([a-zA-Z0-9$_]{2,4})\([a-zA-Z0-9$_]+\.get\("s"\)\)"#,
         r#"\.sig\|\|([a-zA-Z0-9$_]{2,4})\(decodeURIComponent"#,
         r#"a\.sig=([a-zA-Z0-9$_]{2,4})\(a\."#,
+        r#"\.set\("signature"\s*,\s*([a-zA-Z0-9$_]{2,4})\(b\)"#,
+        r#"a=([a-zA-Z0-9$_]{2,4})\(decodeURIComponent\(a\.get\("s"\)"#,
+        r#"([a-zA-Z0-9$_]{2,4})\(decodeURIComponent\(h\.s\)\)"#,
         // Broader: assignment to sig from a 2-4 char fn
         r#""signature",([a-zA-Z0-9$_]{2,4})\("#,
+        r#"\.set\("signature",([a-zA-Z0-9$_]{2,4})\("#,
     ]
     .iter()
     .find_map(|pat| {
@@ -423,6 +426,54 @@ fn extract_sig_timestamp(player_js: &str) -> u32 {
     19950
 }
 
+/// Logs key pattern presence and writes player JS to /tmp for manual analysis.
+fn dump_player_diagnostics(js: &str) {
+    let has_qwo_marker = js.contains("=function(N){try{var S=(new g.");
+    let has_gyk = js.contains("g.yk=");
+    let has_nget = js.contains(r#".get("n")"#);
+    let has_nset = js.contains(r#".set("n","#);
+    let has_sig_set = js.contains(r#".set("signature","#) || js.contains(r#".set("sig","#);
+
+    // Find the snippet around .get("n") for pattern analysis.
+    let nget_ctx = js
+        .find(r#".get("n")"#)
+        .map(|pos| {
+            let lo = pos.saturating_sub(80);
+            let hi = (pos + 200).min(js.len());
+            js[lo..hi].to_owned()
+        })
+        .unwrap_or_default();
+
+    // Snippet around "signature" set-call.
+    let sig_ctx = js
+        .find(r#""signature""#)
+        .map(|pos| {
+            let lo = pos.saturating_sub(80);
+            let hi = (pos + 200).min(js.len());
+            js[lo..hi].to_owned()
+        })
+        .unwrap_or_default();
+
+    tracing::warn!(
+        has_qwo_marker,
+        has_gyk,
+        has_nget,
+        has_nset,
+        has_sig_set,
+        js_len = js.len(),
+        "player JS diagnostics"
+    );
+    tracing::warn!(nget_ctx, "context around .get(\"n\")");
+    tracing::warn!(sig_ctx, "context around \"signature\"");
+
+    // Write full player JS to /tmp so it can be inspected manually.
+    if let Err(e) = std::fs::write("/tmp/yt-player-debug.js", js) {
+        tracing::warn!(error = %e, "failed to write player JS to /tmp");
+    } else {
+        tracing::warn!("player JS written to /tmp/yt-player-debug.js for inspection");
+    }
+}
+
 async fn player_info() -> &'static PlayerInfo {
     PLAYER_INFO
         .get_or_init(|| async {
@@ -445,6 +496,7 @@ async fn player_info() -> &'static PlayerInfo {
                 Some(js) => {
                     let nfunc_js = extract_nfunc(&js).or_else(|| {
                         tracing::warn!("nfunc not found in player JS");
+                        dump_player_diagnostics(&js);
                         None
                     });
                     let sig_js = extract_sig_func(&js).or_else(|| {
