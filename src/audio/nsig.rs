@@ -7,6 +7,8 @@ static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 struct PlayerInfo {
     nfunc_js: Option<Box<str>>,
+    /// Full player JS, kept only for QWO-style nfunc so undefined symbols can be resolved.
+    player_js: Option<Box<str>>,
     sig_js: Option<Box<str>>,
     sig_timestamp: u32,
 }
@@ -499,16 +501,21 @@ async fn player_info() -> &'static PlayerInfo {
                         dump_player_diagnostics(&js);
                         None
                     });
+                    // Keep full player JS only when the QWO wrapper needs it to
+                    // resolve undefined references at eval time.
+                    let is_qwo = nfunc_js.as_deref().map_or(false, |s| s.contains("__nfunc"));
+                    let player_js = is_qwo.then(|| js.clone().into_boxed_str());
+
                     let sig_js = extract_sig_func(&js).or_else(|| {
                         tracing::warn!("sig func not found in player JS");
                         None
                     });
                     let sig_timestamp = extract_sig_timestamp(&js);
-                    PlayerInfo { nfunc_js, sig_js, sig_timestamp }
+                    PlayerInfo { nfunc_js, player_js, sig_js, sig_timestamp }
                 }
                 None => {
                     tracing::warn!("failed to fetch player JS");
-                    PlayerInfo { nfunc_js: None, sig_js: None, sig_timestamp: 19950 }
+                    PlayerInfo { nfunc_js: None, player_js: None, sig_js: None, sig_timestamp: 19950 }
                 }
             }
         })
@@ -598,53 +605,151 @@ var localStorage = { getItem: function(){ return null; }, setItem: function(){},
 var sessionStorage = localStorage;
 "#;
 
+/// Look up a symbol's definition in the player JS.
+/// Returns a `var SYM=VALUE;` snippet suitable for prepending to an eval context.
+fn find_sym_definition(player_js: &str, sym: &str) -> Option<String> {
+    // Named function: SYM = function(...){...}
+    if let Some(f) = extract_named_func(player_js, sym) {
+        return Some(format!("var {sym}={f};\n"));
+    }
+    // Array or object literal: SYM=[...] / SYM={...}
+    let re = Regex::new(&format!(
+        r"(?:(?:var|let|const)\s+)?\b{}\s*=\s*",
+        regex::escape(sym)
+    ))
+    .ok()?;
+    let m = re.find(player_js)?;
+    let val_start = m.end();
+    let first = player_js[val_start..].chars().next()?;
+    match first {
+        '[' => {
+            let close = find_closing(player_js, val_start + 1, '[', ']')?;
+            Some(format!("var {sym}={};\n", &player_js[val_start..=close]))
+        }
+        '{' => {
+            let close = find_closing(player_js, val_start + 1, '{', '}')?;
+            Some(format!("var {sym}={};\n", &player_js[val_start..=close]))
+        }
+        _ => {
+            // Scalar / identifier
+            let end = player_js[val_start..].find(|c: char| c == ';' || c == '\n')?;
+            let val = player_js[val_start..val_start + end].trim();
+            if val.is_empty() {
+                return None;
+            }
+            Some(format!("var {sym}={val};\n"))
+        }
+    }
+}
+
+/// One evaluation attempt for QWO-style nfunc.
+///
+/// Returns:
+/// - `(Some(result), None)` — success
+/// - `(None, Some(sym))` — undefined symbol blocking eval; add its definition and retry
+/// - `(None, None)` — fatal error
+fn eval_nfunc_qwo(nfunc: &str, extra_defs: &str, n_json: &str) -> (Option<String>, Option<String>) {
+    let Some(rt) = rquickjs::Runtime::new().ok() else {
+        return (None, None);
+    };
+    let Some(ctx) = rquickjs::Context::full(&rt).ok() else {
+        return (None, None);
+    };
+    ctx.with(|ctx| {
+        let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
+
+        let setup = format!("{extra_defs}\n{nfunc}");
+        if let Err(_) = ctx.eval::<rquickjs::Value, _>(setup.as_str()) {
+            let exc = format_js_exception(&ctx);
+            let sym = Regex::new(r"'?([a-zA-Z$_][a-zA-Z0-9$_]*)' is not defined")
+                .ok()
+                .and_then(|re| re.captures(&exc))
+                .map(|c| c[1].to_owned());
+            // Also try without quotes: "X is not defined"
+            let sym = sym.or_else(|| {
+                Regex::new(r"\b([a-zA-Z$_][a-zA-Z0-9$_]*) is not defined")
+                    .ok()
+                    .and_then(|re| re.captures(&exc))
+                    .map(|c| c[1].to_owned())
+            });
+            if sym.is_none() {
+                tracing::warn!(exc, "nfunc setup failed with non-undef error");
+            }
+            return (None, sym);
+        }
+
+        let call = format!("__nfunc({n_json})");
+        match ctx.eval::<rquickjs::Value, _>(call.as_str()) {
+            Ok(v) => {
+                let result = v
+                    .as_string()
+                    .and_then(|s| s.to_string().ok())
+                    .filter(|s| !s.is_empty());
+                if result.is_none() {
+                    tracing::warn!("__nfunc returned null or empty string");
+                }
+                (result, None)
+            }
+            Err(e) => {
+                let exc = format_js_exception(&ctx);
+                tracing::warn!(error = %e, exc, "__nfunc call failed");
+                (None, None)
+            }
+        }
+    })
+}
+
 /// Decrypt the YouTube CDN `n` throttling parameter using the player JS nfunc.
 async fn decrypt_nsig(encrypted: &str) -> Option<String> {
-    let nfunc = player_info().await.nfunc_js.as_deref()?;
+    let info = player_info().await;
+    let nfunc = info.nfunc_js.as_deref()?.to_owned();
     let encrypted = encrypted.to_owned();
-    let nfunc = nfunc.to_owned();
-
-    let is_qwo_style = nfunc.contains("__nfunc");
+    let is_qwo = nfunc.contains("__nfunc");
+    let player_js = is_qwo
+        .then(|| info.player_js.as_deref().map(str::to_owned))
+        .flatten();
 
     tokio::task::spawn_blocking(move || {
-        let rt = rquickjs::Runtime::new().ok()?;
-        let ctx = rquickjs::Context::full(&rt).ok()?;
-        ctx.with(|ctx| {
-            if let Err(e) = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS) {
-                tracing::warn!(error = %e, "browser stubs injection failed");
-            }
+        let n_json = serde_json::to_string(&encrypted).ok()?;
 
-            let n_json = serde_json::to_string(&encrypted).ok()?;
-
-            if is_qwo_style {
-                // Step 1: eval the setup code (defines __nfunc and its dependencies).
-                if let Err(e) = ctx.eval::<rquickjs::Value, _>(nfunc.as_str()) {
-                    let exc_detail = format_js_exception(&ctx);
-                    tracing::warn!(error = %e, exc_detail, "QuickJS failed during nfunc setup");
-                    return None;
-                }
-                // Step 2: call __nfunc with the encrypted n param.
-                let call = format!("__nfunc({n_json})");
-                match ctx.eval::<rquickjs::Value, _>(call.as_str()) {
-                    Ok(v) => v.as_string().and_then(|s| s.to_string().ok()),
-                    Err(e) => {
-                        let exc_detail = format_js_exception(&ctx);
-                        tracing::warn!(error = %e, exc_detail, "QuickJS failed calling __nfunc");
-                        None
-                    }
-                }
-            } else {
+        if !is_qwo {
+            // IIFE-style: self-contained, no undefined-ref resolution needed.
+            let rt = rquickjs::Runtime::new().ok()?;
+            let ctx = rquickjs::Context::full(&rt).ok()?;
+            return ctx.with(|ctx| {
+                let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
                 let code = format!("({nfunc})({n_json})");
-                match ctx.eval::<rquickjs::Value, _>(code.as_str()) {
-                    Ok(v) => v.as_string().and_then(|s| s.to_string().ok()),
-                    Err(e) => {
-                        let exc_detail = format_js_exception(&ctx);
-                        tracing::warn!(error = %e, exc_detail, "QuickJS eval error in nfunc");
-                        None
-                    }
-                }
+                ctx.eval::<rquickjs::Value, _>(code.as_str())
+                    .ok()?
+                    .as_string()
+                    .and_then(|s| s.to_string().ok())
+            });
+        }
+
+        // QWO-style: iteratively resolve undefined symbols up to 8 times.
+        let mut extra_defs = String::new();
+        for attempt in 0usize..=8 {
+            let (result, undef_sym) = eval_nfunc_qwo(&nfunc, &extra_defs, &n_json);
+            if let Some(r) = result {
+                tracing::debug!(attempt, "nsig decrypted");
+                return Some(r);
             }
-        })
+            if let Some(sym) = undef_sym {
+                if let Some(def) = player_js.as_deref().and_then(|pjs| find_sym_definition(pjs, &sym)) {
+                    tracing::debug!(sym, attempt, "resolved undefined symbol in nfunc");
+                    // Prepend so deps are defined before what uses them.
+                    extra_defs = format!("{def}\n{extra_defs}");
+                    continue;
+                }
+                tracing::warn!(sym, attempt, "no definition found for undefined symbol");
+                return None;
+            }
+            // Fatal error — no point retrying.
+            return None;
+        }
+
+        tracing::warn!("max retries exceeded resolving nfunc dependencies");
+        None
     })
     .await
     .ok()
