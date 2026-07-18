@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use freya::prelude::*;
-use ytmapi_rs::parse::ParsedSongArtist;
+use ytdroid::models::Artist;
 
 #[derive(Clone)]
 pub struct TextInfo {
@@ -22,7 +22,7 @@ pub enum TextInfoType {
     None,
     Plain(String),
     Clickable { text: String, id: String },
-    Authors(Vec<ParsedSongArtist>),
+    Authors(Vec<Artist>),
 }
 
 impl Default for TextInfo {
@@ -59,7 +59,7 @@ impl TextInfo {
             ..Default::default()
         }
     }
-    pub fn authors(content: impl Into<Vec<ParsedSongArtist>>) -> Self {
+    pub fn authors(content: impl Into<Vec<Artist>>) -> Self {
         Self {
             ty: TextInfoType::Authors(content.into()),
             ..Default::default()
@@ -95,24 +95,12 @@ impl TextInfo {
                 let mut elements = Vec::new();
 
                 for (i, author) in authors.iter().enumerate() {
-                    // Add separator
                     if i == authors.len() - 1 && i > 0 {
                         elements.push(Span::new(" y "));
                     } else if i > 0 {
                         elements.push(Span::new(", "));
                     }
-
-                    // Add author name
-                    if let Some(id) = &author.id {
-                        let _ = id;
-                        elements.push(
-                            Span::new(author.name.clone()),
-                            // TODO: implement on press
-                            // .on_press(move |_| on_click(id_str.clone())),
-                        );
-                    } else {
-                        elements.push(Span::new(author.name.clone()));
-                    }
+                    elements.push(Span::new(author.name.clone()));
                 }
 
                 elements
@@ -121,8 +109,8 @@ impl TextInfo {
     }
 }
 
-impl From<Vec<ParsedSongArtist>> for TextInfo {
-    fn from(value: Vec<ParsedSongArtist>) -> Self {
+impl From<Vec<Artist>> for TextInfo {
+    fn from(value: Vec<Artist>) -> Self {
         Self::authors(value)
     }
 }

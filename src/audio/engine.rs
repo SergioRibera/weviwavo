@@ -128,11 +128,7 @@ async fn handle_command(
 ) {
     match cmd {
         AudioCommand::Play { video_id, quality, title, artist, album, thumbnail_url } => {
-            let yt = radio.read().yt_session.clone();
-            let Some(yt) = yt else {
-                error!("AudioCommand::Play received but no YT session");
-                return;
-            };
+            let cookies = radio.read().cookie_header.clone();
 
             {
                 let mut state = radio.write_channel(DataChannel::Player);
@@ -145,11 +141,9 @@ async fn handle_command(
                 p.is_playing = true;
             }
 
-            // Audio fetch is CPU/network-bound and does not touch Freya state,
-            // so it is safe to run on a regular tokio task.
             let tx = fetch_tx.clone();
             tokio::spawn(async move {
-                let result = fetch_audio_bytes(&yt, &video_id, quality)
+                let result = fetch_audio_bytes(&video_id, quality, cookies)
                     .await
                     .map_err(|e| e.to_string());
                 tx.send(result).await.ok();

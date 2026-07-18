@@ -63,6 +63,7 @@ impl App for MainApp {
                         .children(
                             radio
                                 .feed
+                                .sections
                                 .clone()
                                 .into_iter()
                                 .map(Section::new)

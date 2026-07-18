@@ -125,8 +125,7 @@
           packages =
             with pkgs;
             [
-              cargo
-              rustc
+              rust-bin.stable.latest.default
 
               cargo-dist
               cargo-release

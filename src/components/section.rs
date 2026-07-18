@@ -1,8 +1,7 @@
 use std::ops::Deref;
-use std::str::FromStr;
 
 use freya::{animation::*, prelude::*};
-use ytmapi_rs::parse::HomeSection;
+use ytdroid::pages::home::HomeSection;
 
 use super::{SongInfo, scroll_button, ScrollDir};
 
@@ -45,7 +44,7 @@ enum WindowSize {
 
 impl Component for Section {
     fn render_key(&self) -> DiffKey {
-        DiffKey::from(&self.home.title)
+        DiffKey::from(&self.home.title.clone().unwrap_or_default())
     }
 
     fn render(&self) -> impl IntoElement {
@@ -89,7 +88,7 @@ impl Component for Section {
         }
 
         let scroll_amount = 270; // 250 (item size) + 20 (spacing)
-        let content_len = self.contents.len();
+        let content_len = self.items.len();
 
         // Freya stores scroll as negative offsets: 0 = start, -N = scrolled N px right.
         let (current_x, _): (i32, i32) = scroll_controller.into();
@@ -99,7 +98,7 @@ impl Component for Section {
         let can_scroll_right = current_x > -max_overflow && content_len > 4;
 
         tracing::trace!(
-            section = %self.home.title,
+            section = %self.home.title.as_deref().unwrap_or(""),
             content_len,
             current_x,
             can_scroll_left,
@@ -129,37 +128,15 @@ impl Component for Section {
                             .spacing(15.)
                             .horizontal()
                             .cross_align(Alignment::Center)
-                            .maybe_child(self.home.thumbnail.as_ref().map(|t| {
-                                rect()
-                                    .center()
-                                    .rounded_full()
-                                    .width(Size::px(56.))
-                                    .height(Size::px(56.))
-                                    .overflow(Overflow::Clip)
-                                    .child(
-                                        ImageViewer::new(Url::from_str(t.url.as_str()).unwrap())
-                                            .expanded()
-                                            .center()
-                                            .image_cover(ImageCover::Center),
-                                    )
-                                    .into_element()
-                            }))
                             .child(
                                 rect()
                                     .spacing(0.)
                                     .vertical()
-                                    .maybe_child(self.home.strapline.clone().map(|s| {
-                                        label()
-                                            .font_weight(FontWeight::LIGHT)
-                                            .font_size(19.)
-                                            .text(s)
-                                            .into_element()
-                                    }))
                                     .child(
                                         label()
                                             .font_weight(FontWeight::BOLD)
                                             .font_size(54.)
-                                            .text(self.title.clone()),
+                                            .text(self.home.title.clone().unwrap_or_default()),
                                     ),
                             ),
                     )
@@ -186,7 +163,7 @@ impl Component for Section {
                     .show_scrollbar(false)
                     .width(Size::percent(max_width))
                     .children(
-                        self.contents
+                        self.items
                             .iter()
                             .map(SongInfo::from)
                             .map(IntoElement::into_element),

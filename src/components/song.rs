@@ -4,8 +4,7 @@ use freya::animation::*;
 use freya::icons::lucide::{audio_lines, play};
 use freya::prelude::*;
 use freya::radio::use_radio;
-use ytmapi_rs::common::{Thumbnail, YoutubeID};
-use ytmapi_rs::parse::HomeContent;
+use ytdroid::models::YTItem;
 
 use super::TextInfo;
 use crate::app::{Data, DataChannel};
@@ -47,28 +46,19 @@ impl SongInfo {
             .spans_iter(all_elements.into_iter())
             .into_element()
     }
-
-    fn get_best_thumbnail(thumbnails: &[Thumbnail]) -> String {
-        thumbnails
-            .iter()
-            .max_by_key(|t| t.width * t.height)
-            .map(|t| t.url.clone())
-            .unwrap_or_default()
-    }
 }
 
-impl<'a> From<&'a HomeContent> for SongInfo {
-    fn from(value: &'a HomeContent) -> Self {
+impl<'a> From<&'a YTItem> for SongInfo {
+    fn from(value: &'a YTItem) -> Self {
         match value {
-            HomeContent::Album(v) => {
+            YTItem::Album(v) => {
                 let left = if !v.artists.is_empty() {
                     TextInfo::authors(v.artists.clone())
                 } else {
                     TextInfo::plain("Album", None)
                 };
-
                 Self {
-                    id: v.album_id.get_raw().to_string(),
+                    id: v.id.clone(),
                     title: v.title.clone(),
                     artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: String::new(),
@@ -77,55 +67,30 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                     is_album: true,
                     is_artist: false,
                     is_video: false,
-                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
+                    thumbnail: v.thumbnail.clone().unwrap_or_default(),
                 }
             }
-            HomeContent::Playlist(v) => {
-                let left = if !v.author.is_empty() {
-                    TextInfo::authors(v.author.clone())
-                } else {
-                    TextInfo::none()
-                };
-
-                let details = if let Some(desc) = &v.description {
-                    Some(TextInfo::plain(desc.clone(), None))
-                } else {
-                    v.count
-                        .as_ref()
-                        .map(|c| TextInfo::plain(format!("{c} songs"), None))
-                };
-
+            YTItem::Playlist(v) => {
+                let left = v.author.as_ref()
+                    .map(|a| TextInfo::plain(a.clone(), None))
+                    .unwrap_or_else(TextInfo::none);
+                let details = v.song_count_text.as_ref()
+                    .map(|c| TextInfo::plain(c.clone(), None));
                 Self {
-                    id: v.playlist_id.get_raw().to_string(),
+                    id: v.id.clone(),
                     title: v.title.clone(),
-                    artist: v.author.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artist: v.author.clone().unwrap_or_default(),
                     album: String::new(),
                     left,
                     details,
                     is_album: false,
                     is_artist: false,
                     is_video: false,
-                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
+                    thumbnail: v.thumbnail.clone().unwrap_or_default(),
                 }
             }
-            HomeContent::WatchPlaylist(v) => {
-                let left = TextInfo::plain("Playlist", None);
-
-                Self {
-                    id: v.playlist_id.get_raw().to_string(),
-                    title: v.title.clone(),
-                    artist: String::new(),
-                    album: String::new(),
-                    left,
-                    details: None,
-                    is_album: true,
-                    is_artist: false,
-                    is_video: false,
-                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
-                }
-            }
-            HomeContent::Artist(v) => Self {
-                id: v.channel_id.get_raw().to_string(),
+            YTItem::Artist(v) => Self {
+                id: v.id.clone(),
                 title: v.title.clone(),
                 artist: String::new(),
                 album: String::new(),
@@ -136,25 +101,23 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                 is_album: false,
                 is_artist: true,
                 is_video: false,
-                thumbnail: Self::get_best_thumbnail(&v.thumbnails),
+                thumbnail: v.thumbnail.clone().unwrap_or_default(),
             },
-            HomeContent::Song(v) => {
+            YTItem::Song(v) => {
                 let left = if !v.artists.is_empty() {
                     TextInfo::authors(v.artists.clone())
                 } else {
                     TextInfo::none()
                 };
-
                 let details = v.album.as_ref().map(|album| {
-                    if !album.id.get_raw().is_empty() {
-                        TextInfo::clickable(album.id.get_raw().to_string(), album.name.clone())
+                    if !album.id.is_empty() {
+                        TextInfo::clickable(album.id.clone(), album.name.clone())
                     } else {
                         TextInfo::plain(album.name.clone(), None)
                     }
                 });
-
                 Self {
-                    id: v.video_id.get_raw().to_string(),
+                    id: v.id.clone(),
                     title: v.title.clone(),
                     artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                     album: v.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
@@ -162,25 +125,37 @@ impl<'a> From<&'a HomeContent> for SongInfo {
                     details,
                     is_album: false,
                     is_artist: false,
-                    is_video: false,
-                    thumbnail: Self::get_best_thumbnail(&v.thumbnails),
+                    is_video: v.is_video_song(),
+                    thumbnail: v.thumbnail.clone().unwrap_or_default(),
                 }
             }
-            HomeContent::Video(v) => Self {
-                id: v.video_id.get_raw().to_string(),
+            YTItem::Podcast(v) => Self {
+                id: v.id.clone(),
                 title: v.title.clone(),
-                artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                artist: v.author.clone().unwrap_or_default(),
                 album: String::new(),
-                left: if !v.artists.is_empty() {
-                    TextInfo::authors(v.artists.clone())
-                } else {
-                    TextInfo::none()
-                },
+                left: v.author.as_ref()
+                    .map(|a| TextInfo::plain(a.clone(), None))
+                    .unwrap_or_else(TextInfo::none),
                 details: None,
+                is_album: true,
+                is_artist: false,
+                is_video: false,
+                thumbnail: v.thumbnail.clone().unwrap_or_default(),
+            },
+            YTItem::Episode(v) => Self {
+                id: v.id.clone(),
+                title: v.title.clone(),
+                artist: v.podcast.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+                album: String::new(),
+                left: v.podcast.as_ref()
+                    .map(|p| TextInfo::plain(p.name.clone(), None))
+                    .unwrap_or_else(TextInfo::none),
+                details: v.date.as_ref().map(|d| TextInfo::plain(d.clone(), None)),
                 is_album: false,
                 is_artist: false,
-                is_video: true,
-                thumbnail: Self::get_best_thumbnail(&v.thumbnails),
+                is_video: false,
+                thumbnail: v.thumbnail.clone().unwrap_or_default(),
             },
         }
     }

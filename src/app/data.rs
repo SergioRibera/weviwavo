@@ -1,8 +1,7 @@
 use freya::radio::RadioChannel;
 use tokio::sync::mpsc;
-use ytmapi_rs::YtMusic;
-use ytmapi_rs::auth::BrowserToken;
-use ytmapi_rs::parse::HomeSections;
+use ytdroid::pages::home::HomePage;
+use ytdroid::YouTube;
 
 use crate::audio::AudioCommand;
 
@@ -20,8 +19,10 @@ pub struct PlayerState {
 
 #[derive(Default, Clone)]
 pub struct Data {
-    pub yt_session: Option<YtMusic<BrowserToken>>,
-    pub feed: HomeSections,
+    pub yt_session: Option<YouTube>,
+    /// Raw `Cookie:` header preserved for the audio engine's authenticated requests.
+    pub cookie_header: Option<String>,
+    pub feed: HomePage,
     pub player: PlayerState,
     pub audio_cmd: Option<mpsc::Sender<AudioCommand>>,
 }
