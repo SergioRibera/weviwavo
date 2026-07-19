@@ -134,12 +134,20 @@
 
               pkg-config
               wayland
+              python3
             ]
             ++ libraries;
           buildInputs = with pkgs; [
             llvmPackages.bintools
           ];
           LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath libraries}";
+          # jemalloc configure: needs _GNU_SOURCE for strerror_r detection.
+          # Disable fortify hardening — Nix GCC wrapper injects -D_FORTIFY_SOURCE=2
+          # but jemalloc configure uses -O0, causing a -Werror=cpp failure.
+          shellHook = ''
+            export CFLAGS="-D_GNU_SOURCE ''${CFLAGS:-}"
+            export NIX_HARDENING_ENABLE="''${NIX_HARDENING_ENABLE//fortify/}"
+          '';
         };
       }
     );

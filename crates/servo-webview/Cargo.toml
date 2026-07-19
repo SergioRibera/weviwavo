@@ -1,0 +1,17 @@
+[package]
+name = "servo-webview"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+servo = { version = "0.4.0", default-features = false, features = [
+    "baked-in-resources",
+    "clipboard",
+    "js_jit",
+] }
+winit = "0.30"
+url = "2"
+euclid = "0.22"
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
+thiserror = "2"
+tracing = "0.1"

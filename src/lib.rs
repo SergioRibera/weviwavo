@@ -70,7 +70,43 @@ fn main() {
         .unwrap();
     let _rt = rt.enter();
 
-    let radio = RadioStation::create_global(app::Data::default());
+    // Try to get cookies from installed browsers first.
+    let scraped = rt.block_on(async {
+        use cookie_scrapy::{GetCookiesOptions, get_cookies, to_cookie_header};
+        let result = get_cookies(GetCookiesOptions::new("https://youtube.com")).await;
+        let cookies = result
+            .cookies
+            .into_iter()
+            .filter(|c| crate::auth::COOKIE_NAMES.iter().any(|n| c.name.starts_with(n)))
+            .collect::<Vec<_>>();
+        to_cookie_header(&cookies)
+    });
+
+    // If no browser cookies found, open the Servo login window (blocks main thread).
+    let cookie_header: Option<String> = if scraped.is_empty() {
+        tracing::info!("no browser cookies found — opening login window");
+        match servo_webview::run_login() {
+            Ok(h) => {
+                tracing::info!("login complete");
+                Some(h)
+            }
+            Err(servo_webview::Error::Cancelled) => {
+                tracing::warn!("login cancelled by user");
+                None
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "servo login window failed");
+                None
+            }
+        }
+    } else {
+        Some(scraped)
+    };
+
+    let mut initial_data = app::Data::default();
+    initial_data.cookie_header = cookie_header;
+
+    let radio = RadioStation::create_global(initial_data);
 
     launch(
         LaunchConfig::new()

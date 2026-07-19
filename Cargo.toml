@@ -22,6 +22,7 @@ members = ["crates/*"]
 
 [dependencies]
 cookie-scrapy = { path = "./crates/cookie-scrapy" }
+servo-webview = { path = "./crates/servo-webview" }
 freya = { version = "0.4.0", features = [
     "remote-asset",
     "router",

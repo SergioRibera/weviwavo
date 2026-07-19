@@ -20,13 +20,20 @@ pub async fn run_startup(mut radio: RadioStation<Data, DataChannel>) {
 }
 
 async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
-    let result = get_cookies(GetCookiesOptions::new("https://youtube.com")).await;
-    let cookies = result
-        .cookies
-        .into_iter()
-        .filter(|c| COOKIE_NAMES.iter().any(|n| c.name.starts_with(n)))
-        .collect::<Vec<_>>();
-    let cookie_header = to_cookie_header(&cookies);
+    // Use pre-populated cookie header (from login window or cookie-scrapy in main),
+    // falling back to a fresh cookie-scrapy scrape if absent.
+    let cookie_header = match radio.read().cookie_header.clone() {
+        Some(h) => h,
+        None => {
+            let result = get_cookies(GetCookiesOptions::new("https://youtube.com")).await;
+            let cookies = result
+                .cookies
+                .into_iter()
+                .filter(|c| COOKIE_NAMES.iter().any(|n| c.name.starts_with(n)))
+                .collect::<Vec<_>>();
+            to_cookie_header(&cookies)
+        }
+    };
 
     let yt = YouTube::new(Some(&cookie_header), Locale::default())
         .inspect_err(|e| tracing::error!(error = %e, "failed to create YT client"));
