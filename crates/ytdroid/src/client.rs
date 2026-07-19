@@ -21,6 +21,13 @@ pub struct YouTubeClient {
     pub include_user_agent_in_context: bool,
     /// Whether this is an embedded player that can bypass age-gating.
     pub is_embedded: bool,
+    /// Innertube API base URL. Non-music clients (ANDROID, VR, TV) must use
+    /// `www.youtube.com` — sending them to `music.youtube.com` returns 400.
+    pub api_base: &'static str,
+    /// `Origin` header value for this client.
+    pub origin: &'static str,
+    /// `Referer` header value for this client.
+    pub referer: &'static str,
 }
 
 /// Extra fields merged into `context.client` for clients that need them.
@@ -61,6 +68,9 @@ impl YouTubeClient {
         use_web_po_tokens: true,
         include_user_agent_in_context: false,
         is_embedded: false,
+        api_base: MUSIC_API_BASE,
+        origin: MUSIC_ORIGIN,
+        referer: MUSIC_REFERER,
     };
 
     /// Generic web client (no auth, no n-transform in this context).
@@ -84,9 +94,13 @@ impl YouTubeClient {
         use_web_po_tokens: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        api_base: YT_API_BASE,
+        origin: YT_ORIGIN,
+        referer: YT_REFERER,
     };
 
-    /// Primary player client — no n-transform, SAPISIDHASH auth supported.
+    /// Android player client — no n-transform, SAPISIDHASH auth supported.
+    /// Must use www.youtube.com base; music.youtube.com returns 400 for this client.
     pub const ANDROID: Self = Self {
         client_name: "ANDROID",
         client_version: "21.03.38",
@@ -107,6 +121,9 @@ impl YouTubeClient {
         use_web_po_tokens: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        api_base: YT_API_BASE,
+        origin: YT_ORIGIN,
+        referer: YT_REFERER,
     };
 
     /// `VisionOS` — no auth, no n-transform, may stop working any time (internal client).
@@ -130,9 +147,13 @@ impl YouTubeClient {
         use_web_po_tokens: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        api_base: YT_API_BASE,
+        origin: YT_ORIGIN,
+        referer: YT_REFERER,
     };
 
     /// Android VR 1.65.10 — no auth, no n-transform, non-adaptive bitrate variant available.
+    /// Must use www.youtube.com base; music.youtube.com returns 400 for this client.
     pub const ANDROID_VR_1_65: Self = Self {
         client_name: "ANDROID_VR",
         client_version: "1.65.10",
@@ -153,9 +174,13 @@ impl YouTubeClient {
         use_web_po_tokens: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        api_base: YT_API_BASE,
+        origin: YT_ORIGIN,
+        referer: YT_REFERER,
     };
 
     /// Android VR 1.43.32 — uses non-adaptive bitrate (fixes audio stuttering on YTM).
+    /// Must use www.youtube.com base; music.youtube.com returns 400 for this client.
     pub const ANDROID_VR_1_43: Self = Self {
         client_name: "ANDROID_VR",
         client_version: "1.43.32",
@@ -176,6 +201,9 @@ impl YouTubeClient {
         use_web_po_tokens: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        api_base: YT_API_BASE,
+        origin: YT_ORIGIN,
+        referer: YT_REFERER,
     };
 
     /// TVHTML5 — login-capable WEB client, needs n-transform + `PoToken` for player.
@@ -199,6 +227,9 @@ impl YouTubeClient {
         use_web_po_tokens: true,
         include_user_agent_in_context: true,
         is_embedded: false,
+        api_base: YT_API_BASE,
+        origin: YT_ORIGIN,
+        referer: YT_REFERER,
     };
 }
 
@@ -223,3 +254,7 @@ impl Default for Locale {
 pub(crate) const MUSIC_ORIGIN: &str = "https://music.youtube.com";
 pub(crate) const MUSIC_REFERER: &str = "https://music.youtube.com/";
 pub(crate) const MUSIC_API_BASE: &str = "https://music.youtube.com/youtubei/v1/";
+
+pub(crate) const YT_ORIGIN: &str = "https://www.youtube.com";
+pub(crate) const YT_REFERER: &str = "https://www.youtube.com/";
+pub(crate) const YT_API_BASE: &str = "https://www.youtube.com/youtubei/v1/";

@@ -8,6 +8,7 @@ mod app;
 mod audio;
 mod auth;
 mod components;
+mod cookies;
 mod dialog;
 mod startup;
 mod utils;
@@ -70,37 +71,30 @@ fn main() {
         .unwrap();
     let _rt = rt.enter();
 
-    // Try to get cookies from installed browsers first.
-    let scraped = rt.block_on(async {
-        use cookie_scrapy::{GetCookiesOptions, get_cookies, to_cookie_header};
-        let result = get_cookies(GetCookiesOptions::new("https://youtube.com")).await;
-        let cookies = result
-            .cookies
-            .into_iter()
-            .filter(|c| crate::auth::COOKIE_NAMES.iter().any(|n| c.name.starts_with(n)))
-            .collect::<Vec<_>>();
-        to_cookie_header(&cookies)
-    });
-
-    // If no browser cookies found, open the Servo login window (blocks main thread).
-    let cookie_header: Option<String> = if scraped.is_empty() {
-        tracing::info!("no browser cookies found — opening login window");
-        match servo_webview::run_login() {
-            Ok(h) => {
-                tracing::info!("login complete");
-                Some(h)
-            }
-            Err(servo_webview::Error::Cancelled) => {
-                tracing::warn!("login cancelled by user");
-                None
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "servo login window failed");
-                None
+    // Load persisted cookies; open login window only when absent.
+    let cookie_header: Option<String> = match cookies::load_cookies() {
+        Some(h) => {
+            tracing::info!("loaded cookies from disk");
+            Some(h)
+        }
+        None => {
+            tracing::info!("no saved cookies — opening login window");
+            match servo_webview::run_login() {
+                Ok(h) => {
+                    cookies::save_cookies(&h);
+                    tracing::info!("login complete");
+                    Some(h)
+                }
+                Err(servo_webview::Error::Cancelled) => {
+                    tracing::warn!("login cancelled by user");
+                    None
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "servo login window failed");
+                    None
+                }
             }
         }
-    } else {
-        Some(scraped)
     };
 
     let mut initial_data = app::Data::default();

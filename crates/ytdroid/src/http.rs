@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tracing::{debug, instrument, warn};
 
 use crate::auth::{parse_cookies, sapisidhash};
-use crate::client::{Locale, YouTubeClient, MUSIC_API_BASE, MUSIC_ORIGIN, MUSIC_REFERER};
+use crate::client::{Locale, YouTubeClient};
 use crate::error::{Error, Result};
 use crate::response::{
     AccountMenuResponse, BrowseResponse, GetQueueResponse, GetSearchSuggestionsResponse,
@@ -112,14 +112,14 @@ impl InnerTube {
         client: &YouTubeClient,
         body: Value,
     ) -> Result<Value> {
-        let url = format!("{MUSIC_API_BASE}{endpoint}?prettyPrint=false");
+        let url = format!("{}{endpoint}?prettyPrint=false", client.api_base);
         let cookie_str = self.cookie_header();
         let mut req = self
             .http
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Origin", MUSIC_ORIGIN)
-            .header("Referer", MUSIC_REFERER)
+            .header("Origin", client.origin)
+            .header("Referer", client.referer)
             .header("X-YouTube-Client-Name", client.client_id)
             .header("X-YouTube-Client-Version", client.client_version)
             .header("User-Agent", client.user_agent);
@@ -129,7 +129,7 @@ impl InnerTube {
         }
         if let Some(auth) = sapisidhash(&self.cookies) {
             req = req.header("Authorization", auth);
-            req = req.header("X-Origin", MUSIC_ORIGIN);
+            req = req.header("X-Origin", client.origin);
         }
         if let Some(vid) = &self.visitor_id {
             req = req.header("X-Goog-Visitor-Id", vid);

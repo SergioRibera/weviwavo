@@ -431,9 +431,9 @@ impl YouTube {
     /// Returns [`Error::AllClientsFailed`], [`Error::NotPlayable`], or [`Error::NoAudioFormat`]
     /// when no client yields a playable audio stream.
     pub async fn audio_url(&self, video_id: &str) -> Result<String> {
+        // ANDROID (client_id 3) blocked with 400; VR clients use www.youtube.com and work.
         const CLIENTS: &[YouTubeClient] = &[
             YouTubeClient::ANDROID_VR_1_43,
-            YouTubeClient::ANDROID,
             YouTubeClient::ANDROID_VR_1_65,
         ];
 
