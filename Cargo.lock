@@ -9010,6 +9010,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "euclid",
+ "http 1.4.0",
  "reqwest",
  "rustls",
  "serde_json",

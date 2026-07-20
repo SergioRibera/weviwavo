@@ -1,9 +1,6 @@
 <!DOCTYPE html>
 <html lang="en"><head><title></title><script>
-    // PAGE_DATA is replaced by the Rust HTTP server before serving.
-    const PAGE_DATA = "__PAGE_DATA__";
-
-    // ── BotGuard VM state ────────────────────────────────────────────────────
+    // BotGuard VM state — set once during runBotGuard, reused for all token minting.
     var bgVmFunctions = null;
     var bgVm = null;
     var bgProgram = null;
@@ -118,59 +115,4 @@
       if (!(result instanceof Uint8Array)) throw new Error('ODM:Invalid - got: ' + Object.prototype.toString.call(result));
       return result;
     }
-
-    // ── Orchestration ────────────────────────────────────────────────────────
-
-    function toBase64Url(u8) {
-      return btoa(String.fromCharCode.apply(null, Array.from(u8)))
-        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
-
-    async function init() {
-      // Step 1: obtain BotGuard challenge (Rust proxies to YouTube)
-      var createResp = await fetch('/bg/create', { method: 'POST' });
-      if (!createResp.ok) throw new Error('bg/create ' + createResp.status);
-      var challengeData = await createResp.json();
-
-      // Step 2: run BotGuard VM (pure JS, no network)
-      var bgResult = await runBotGuard(challengeData);
-
-      // Step 3: generate integrity token (Rust proxies to YouTube)
-      var genResp = await fetch('/bg/generateit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ botguardResponse: bgResult.botguardResponse })
-      });
-      if (!genResp.ok) throw new Error('bg/generateit ' + genResp.status);
-      var tokenData = await genResp.json();
-
-      // Step 4: create minter once
-      var integrityToken = new Uint8Array(tokenData.integrityToken);
-      await createPoTokenMinter(bgResult.webPoSignalOutput, integrityToken);
-
-      // Step 5: mint tokens
-      // playerToken is bound to sessionId, streamingToken is bound to videoId
-      // (matches PoTokenGenerator.kt: streamingPot=generatePoToken(sessionId), playerPot=generatePoToken(videoId))
-      var enc = new TextEncoder();
-      var playerBytes = await obtainPoToken(enc.encode(PAGE_DATA.sessionId));
-      var streamingBytes = await obtainPoToken(enc.encode(PAGE_DATA.videoId));
-
-      // Step 6: report results to Rust
-      await fetch('/bg/done', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          player_token: toBase64Url(playerBytes),
-          streaming_token: toBase64Url(streamingBytes)
-        })
-      });
-    }
-
-    window.addEventListener('load', function() {
-      init().catch(function(err) {
-        var msg = (err && err.message) ? err.message : String(err);
-        console.error('[PoToken] fatal:', msg);
-        fetch('/bg/error', { method: 'POST', body: msg }).catch(function() {});
-      });
-    });
 </script></head><body></body></html>
