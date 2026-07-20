@@ -1,11 +1,6 @@
-//! Servo-backed WebView for the weviwavo login flow.
-//!
-//! Call [`run_login`] before launching the main Freya app. It opens a Servo
-//! window, navigates to the YouTube Music login page, and returns the raw
-//! `Cookie:` header string once the user successfully signs in.
-//!
-//! The function blocks the calling thread (runs its own winit event loop) and
-//! is safe to call on the main thread on all supported platforms.
+//! Servo-backed WebViews for weviwavo: login flow and PoToken generation.
+
+pub mod potoken;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -183,7 +178,6 @@ impl ApplicationHandler<WakerEvent> for App {
         let servo = ServoBuilder::default()
             .event_loop_waker(Box::new(waker.clone()))
             .build();
-        servo.setup_logging();
 
         let state = Rc::new(LoginState {
             window,

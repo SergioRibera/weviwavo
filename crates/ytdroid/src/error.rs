@@ -22,6 +22,9 @@ pub enum Error {
 
     #[error("authentication required but no cookie provided")]
     Unauthenticated,
+
+    #[error("HTTP {status} from Innertube API")]
+    HttpStatus { status: u16 },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

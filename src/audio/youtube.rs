@@ -1,227 +1,160 @@
-use serde_json::{json, Value};
+use std::collections::HashMap;
+
+use ytdroid::client::{Locale, YouTubeClient};
+use ytdroid::YouTube;
 
 use crate::audio::AudioQuality;
-
-const ENDPOINT: &str = "https://music.youtube.com/youtubei/v1/player";
-const ORIGIN: &str = "https://music.youtube.com";
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
     #[error("YouTube: {0}")]
-    Yt(String),
+    Yt(#[from] ytdroid::error::Error),
     #[error("HTTP: {0}")]
     Http(#[from] reqwest::Error),
     #[error("HTTP {status} fetching stream")]
     HttpStatus { status: u16 },
     #[error("no audio format for {quality:?}")]
     NoFormat { quality: AudioQuality },
+    #[error("cipher sig decryption failed")]
+    CipherDecryptFailed,
 }
-
-struct Client {
-    name: &'static str,
-    version: &'static str,
-    /// Numeric client ID for X-YouTube-Client-Name header
-    id: &'static str,
-    user_agent: &'static str,
-    /// Whether to send cookie + SAPISIDHASH Authorization
-    login: bool,
-/// Extra fields merged into context.client
-    context_extra: fn() -> Value,
-}
-
-const CLIENTS: &[Client] = &[
-    // ANDROID (MOBILE) — loginSupported=true, useSignatureTimestamp=true, needsNTransform=false
-    Client {
-        name: "ANDROID",
-        version: "21.03.38",
-        id: "3",
-        user_agent: "com.google.android.youtube/21.03.38 (Linux; U; Android 14) gzip",
-        login: true,
-        context_extra: || json!({}),
-    },
-    // VISIONOS — loginSupported=false, still pass cookie in case it helps
-    Client {
-        name: "VISIONOS",
-        version: "0.1",
-        id: "101",
-        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
-        login: false,
-        context_extra: || json!({}),
-    },
-    // ANDROID_VR 1.65.10
-    Client {
-        name: "ANDROID_VR",
-        version: "1.65.10",
-        id: "28",
-        user_agent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-        login: false,
-        context_extra: || json!({
-            "userAgent": "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
-            "osName": "Android",
-            "osVersion": "12L",
-            "deviceMake": "Oculus",
-            "deviceModel": "Quest 3",
-            "androidSdkVersion": "32"
-        }),
-    },
-];
 
 pub async fn fetch_audio_bytes(
     video_id: &str,
-    _quality: AudioQuality,
+    quality: AudioQuality,
     cookies: Option<String>,
 ) -> Result<Vec<u8>, AudioError> {
     tracing::debug!(video_id, has_cookies = cookies.is_some(), "fetching audio");
 
-    let http = reqwest::Client::builder().build().map_err(AudioError::Http)?;
+    let yt = YouTube::new(cookies.as_deref(), Locale::default())?;
 
-    for client in CLIENTS {
-        // Build context.client
-        let mut ctx_client = json!({
-            "clientName": client.name,
-            "clientVersion": client.version,
-            "gl": "US",
-            "hl": "en"
-        });
-        let extra = (client.context_extra)();
-        if let (Some(base), Some(ext)) = (ctx_client.as_object_mut(), extra.as_object()) {
-            for (k, v) in ext {
-                base.insert(k.clone(), v.clone());
-            }
+    // ── Try WEB_REMIX with PoToken first (primary, like Metrolist) ───────────
+    let stream_url = try_web_remix(&yt, video_id).await.or_else(|e| {
+        tracing::warn!("WEB_REMIX+PoToken failed ({e}), trying fallback clients");
+        Err(e)
+    });
+
+    let stream_url = match stream_url {
+        Ok(url) => url,
+        Err(_) => {
+            // Fallback: Android/VR/iOS clients (no PoToken needed)
+            let (raw_data, is_cipher) = yt.audio_stream(video_id).await?;
+            build_stream_url(raw_data, is_cipher, None).await?
         }
+    };
 
-        // Nulls omitted intentionally — Metrolist uses explicitNulls=false
-        let body = json!({
-            "context": {
-                "client": ctx_client,
-                "user": {}
-            },
-            "videoId": video_id,
-            "contentCheckOk": true,
-            "racyCheckOk": true
-        });
+    tracing::debug!(%stream_url, "fetching stream bytes");
 
-        let mut req = http
-            .post(ENDPOINT)
-            .query(&[("prettyPrint", "false")])
-            .header("Content-Type", "application/json")
-            .header("X-Goog-Api-Format-Version", "1")
-            .header("X-YouTube-Client-Name", client.id)
-            .header("X-YouTube-Client-Version", client.version)
-            .header("X-Origin", ORIGIN)
-            .header("Referer", format!("{ORIGIN}/"))
-            .header("User-Agent", client.user_agent)
-            .json(&body);
+    let http = reqwest::Client::builder()
+        .gzip(true)
+        .build()
+        .map_err(AudioError::Http)?;
 
-        // Auth: cookie + SAPISIDHASH for loginSupported clients
-        if client.login {
-            if let Some(cookie_str) = cookies.as_deref() {
-                req = req.header("cookie", cookie_str);
-                if let Some(auth) = sapisidhash(cookie_str) {
-                    req = req.header("Authorization", auth);
-                }
-            }
-        }
+    let mut req = http
+        .get(&stream_url)
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
 
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(client = client.name, error = %e, "player request failed");
-                continue;
-            }
-        };
-
-        if !resp.status().is_success() {
-            tracing::warn!(client = client.name, status = %resp.status(), "player bad status");
-            continue;
-        }
-
-        let data: Value = match resp.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(client = client.name, error = %e, "player json parse failed");
-                continue;
-            }
-        };
-
-        let playability = data["playabilityStatus"]["status"].as_str().unwrap_or("");
-        if playability != "OK" {
-            let reason = data["playabilityStatus"]["reason"].as_str().unwrap_or("?");
-            tracing::warn!(client = client.name, playability, reason, "not playable");
-            continue;
-        }
-
-        let formats = data["streamingData"]["adaptiveFormats"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-
-        tracing::debug!(client = client.name, formats = formats.len(), "adaptive formats");
-
-        // isAudio = width == null (Metrolist's Format.isAudio)
-        // No n-transform needed for ANDROID/VISIONOS/ANDROID_VR
-        let best = formats
-            .iter()
-            .filter(|f| f["width"].is_null())
-            .filter(|f| f["url"].as_str().map(|u| !u.is_empty()).unwrap_or(false))
-            .max_by_key(|f| f["bitrate"].as_u64().unwrap_or(0));
-
-        let Some(fmt) = best else {
-            tracing::warn!(client = client.name, "no usable audio format");
-            continue;
-        };
-
-        let stream_url = fmt["url"].as_str().unwrap();
-        let mime = fmt["mimeType"].as_str().unwrap_or("?");
-        let bitrate = fmt["bitrate"].as_u64().unwrap_or(0);
-        tracing::debug!(%mime, bitrate, "fetching stream");
-
-        let mut stream_req = http
-            .get(stream_url)
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
-
-        // Pass cookie for stream fetch too (needed for some content)
-        if let Some(cookie_str) = cookies.as_deref() {
-            stream_req = stream_req.header("cookie", cookie_str);
-        }
-
-        let stream_resp = match stream_req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(error = %e, "stream fetch failed");
-                continue;
-            }
-        };
-
-        let status = stream_resp.status();
-        if !status.is_success() {
-            tracing::warn!(%status, "stream bad status");
-            continue;
-        }
-
-        let bytes = stream_resp.bytes().await?;
-        tracing::debug!(bytes = bytes.len(), "audio fetched");
-        return Ok(bytes.to_vec());
+    if let Some(cookie_str) = cookies.as_deref() {
+        req = req.header("cookie", cookie_str);
     }
 
-    Err(AudioError::NoFormat { quality: _quality })
+    let resp = req.send().await.map_err(AudioError::Http)?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        tracing::warn!(%status, "stream fetch bad status");
+        return Err(AudioError::HttpStatus { status: status.as_u16() });
+    }
+
+    let bytes = resp.bytes().await.map_err(AudioError::Http)?;
+    tracing::debug!(bytes = bytes.len(), "audio fetched");
+    let _ = quality;
+    Ok(bytes.to_vec())
 }
 
-/// Compute `SAPISIDHASH {ts}_{sha1}` from browser cookie string.
-/// Mirrors Metrolist's InnerTube.kt auth header computation.
-fn sapisidhash(cookies: &str) -> Option<String> {
-    let sapisid = cookies
-        .split(';')
-        .map(|s| s.trim())
-        .find(|s| s.starts_with("SAPISID=") || s.starts_with("__Secure-3PAPISID="))
-        .and_then(|s| s.splitn(2, '=').nth(1))?;
+/// Try WEB_REMIX with PoToken. Returns the final CDN URL (with pot= appended).
+async fn try_web_remix(yt: &YouTube, video_id: &str) -> Result<String, AudioError> {
+    let session_id = yt.visitor_id().unwrap_or(video_id);
 
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let tokens =
+        servo_webview::potoken::generate(session_id, video_id)
+            .await
+            .map_err(|e| AudioError::Yt(ytdroid::error::Error::AllClientsFailed {
+                video_id: format!("PoToken: {e}"),
+            }))?;
 
-    let data = format!("{ts} {sapisid} {ORIGIN}");
-    let hash = sha1_smol::Sha1::from(data.as_bytes()).digest();
-    Some(format!("SAPISIDHASH {ts}_{}", hash))
+    let resp = yt
+        .player_raw(&YouTubeClient::WEB_REMIX, video_id, None, Some(&tokens.player))
+        .await?;
+
+    if resp.playability_status.status != "OK" {
+        return Err(AudioError::Yt(ytdroid::error::Error::NotPlayable {
+            status: resp.playability_status.status,
+            reason: resp.playability_status.reason.unwrap_or_default(),
+        }));
+    }
+
+    let sd = resp.streaming_data.as_ref();
+
+    if let Some(fmt) = sd.and_then(|s| s.best_audio_format()) {
+        let url = fmt.url.clone().ok_or(AudioError::CipherDecryptFailed)?;
+        let pot_url = append_pot(&url, &tokens.streaming);
+        return Ok(pot_url);
+    }
+
+    if let Some(fmt) = sd.and_then(|s| s.best_cipher_audio_format()) {
+        let cipher = fmt.signature_cipher.clone().ok_or(AudioError::CipherDecryptFailed)?;
+        let url = build_stream_url(cipher, true, Some(&tokens.streaming)).await?;
+        return Ok(url);
+    }
+
+    Err(AudioError::Yt(ytdroid::error::Error::NoAudioFormat {
+        video_id: video_id.to_owned(),
+    }))
+}
+
+fn append_pot(url: &str, pot: &str) -> String {
+    if url.contains('?') {
+        format!("{url}&pot={pot}")
+    } else {
+        format!("{url}?pot={pot}")
+    }
+}
+
+/// Resolve raw stream data to a final CDN URL, applying sig decryption + nsig + optional pot=.
+async fn build_stream_url(
+    raw_data: String,
+    is_cipher: bool,
+    pot: Option<&str>,
+) -> Result<String, AudioError> {
+    let url = if is_cipher {
+        let fake = format!("x:?{raw_data}");
+        let parsed = reqwest::Url::parse(&fake).ok();
+        let params: HashMap<String, String> = parsed
+            .as_ref()
+            .map(|u| u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect())
+            .unwrap_or_default();
+
+        let enc_sig = params.get("s").cloned().unwrap_or_default();
+        let sig_param = params.get("sp").cloned().unwrap_or_else(|| "sig".to_string());
+        let base_url = params.get("url").cloned().unwrap_or_default();
+
+        tracing::debug!(sig_param, base_url_len = base_url.len(), "decrypting cipher sig");
+
+        let decrypted_sig = super::nsig::decrypt_sig(&enc_sig)
+            .await
+            .ok_or(AudioError::CipherDecryptFailed)?;
+
+        let url_with_sig = if base_url.contains('?') {
+            format!("{base_url}&{sig_param}={decrypted_sig}")
+        } else {
+            format!("{base_url}?{sig_param}={decrypted_sig}")
+        };
+
+        super::nsig::decrypt_url(&url_with_sig).await
+    } else {
+        super::nsig::decrypt_url(&raw_data).await
+    };
+
+    Ok(pot.map_or_else(|| url.clone(), |p| append_pot(&url, p)))
 }

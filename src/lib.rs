@@ -46,6 +46,20 @@ fn main() {
     use self::startup::run_startup;
     use self::utils::data_dir;
 
+    // Subprocess mode: run only the Servo login window, save cookies, exit.
+    // The parent process spawns us with this flag to avoid the winit EventLoop
+    // recreation error (only one EventLoop allowed per process lifetime).
+    if std::env::args().any(|a| a == "--login") {
+        match servo_webview::run_login() {
+            Ok(h) => {
+                cookies::save_cookies(&h);
+                std::process::exit(0);
+            }
+            Err(servo_webview::Error::Cancelled) => std::process::exit(1),
+            Err(_) => std::process::exit(2),
+        }
+    }
+
     let builder = tracing_appender::rolling::Builder::new()
         .rotation(tracing_appender::rolling::Rotation::DAILY)
         .filename_suffix("log")
@@ -71,26 +85,31 @@ fn main() {
         .unwrap();
     let _rt = rt.enter();
 
-    // Load persisted cookies; open login window only when absent.
+    // Load persisted cookies; if absent spawn self as a login subprocess so
+    // that Servo and Freya each get their own winit EventLoop (one per process).
     let cookie_header: Option<String> = match cookies::load_cookies() {
         Some(h) => {
             tracing::info!("loaded cookies from disk");
             Some(h)
         }
         None => {
-            tracing::info!("no saved cookies — opening login window");
-            match servo_webview::run_login() {
-                Ok(h) => {
-                    cookies::save_cookies(&h);
-                    tracing::info!("login complete");
-                    Some(h)
+            tracing::info!("no saved cookies — spawning login subprocess");
+            let exe = std::env::current_exe().expect("cannot resolve own executable path");
+            match std::process::Command::new(&exe).arg("--login").status() {
+                Ok(s) if s.success() => {
+                    tracing::info!("login subprocess completed — loading cookies");
+                    cookies::load_cookies()
                 }
-                Err(servo_webview::Error::Cancelled) => {
+                Ok(s) if s.code() == Some(1) => {
                     tracing::warn!("login cancelled by user");
                     None
                 }
+                Ok(_) => {
+                    tracing::error!("login subprocess failed");
+                    None
+                }
                 Err(e) => {
-                    tracing::error!(error = %e, "servo login window failed");
+                    tracing::error!(error = %e, "failed to spawn login subprocess");
                     None
                 }
             }

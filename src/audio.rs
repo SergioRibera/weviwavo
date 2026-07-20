@@ -1,4 +1,5 @@
 mod engine;
+mod nsig;
 mod youtube;
 
 pub use engine::{AudioCommand, AudioEngine, run_audio_engine};

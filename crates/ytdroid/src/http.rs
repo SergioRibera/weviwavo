@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tracing::{debug, instrument, warn};
 
 use crate::auth::{parse_cookies, sapisidhash};
-use crate::client::{Locale, YouTubeClient};
+use crate::client::{Locale, YouTubeClient, MUSIC_API_BASE, MUSIC_ORIGIN, MUSIC_REFERER};
 use crate::error::{Error, Result};
 use crate::response::{
     AccountMenuResponse, BrowseResponse, GetQueueResponse, GetSearchSuggestionsResponse,
@@ -93,9 +93,16 @@ impl InnerTube {
         if let Some(v) = client.context_extra.build_id {
             obj.insert("utcOffsetMinutes".into(), json!(0));
             obj.insert("timeZone".into(), json!("UTC"));
-            let _ = v; // build_id unused in context itself
+            let _ = v;
         }
-        json!({ "client": ctx })
+        let mut out = json!({ "client": ctx });
+        if client.is_embedded {
+            out.as_object_mut().unwrap().insert(
+                "thirdParty".into(),
+                json!({ "embedUrl": "https://www.reddit.com/" }),
+            );
+        }
+        out
     }
 
     fn cookie_header(&self) -> String {
@@ -112,24 +119,27 @@ impl InnerTube {
         client: &YouTubeClient,
         body: Value,
     ) -> Result<Value> {
-        let url = format!("{}{endpoint}?prettyPrint=false", client.api_base);
+        let url = format!("{MUSIC_API_BASE}{endpoint}?prettyPrint=false");
         let cookie_str = self.cookie_header();
         let mut req = self
             .http
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Origin", client.origin)
-            .header("Referer", client.referer)
+            .header("X-Goog-Api-Format-Version", "1")
             .header("X-YouTube-Client-Name", client.client_id)
             .header("X-YouTube-Client-Version", client.client_version)
+            // X-Origin and Referer are sent for all clients (matches Metrolist's ytClient).
+            // Note: we use X-Origin (not Origin) — Origin is a CORS browser header and causes
+            // INVALID_ARGUMENT 400 on Android client endpoints when sent unconditionally.
+            .header("X-Origin", MUSIC_ORIGIN)
+            .header("Referer", MUSIC_REFERER)
             .header("User-Agent", client.user_agent);
 
-        if !cookie_str.is_empty() {
+        if client.login_supported && !cookie_str.is_empty() {
             req = req.header("Cookie", &cookie_str);
-        }
-        if let Some(auth) = sapisidhash(&self.cookies) {
-            req = req.header("Authorization", auth);
-            req = req.header("X-Origin", client.origin);
+            if let Some(auth) = sapisidhash(&self.cookies) {
+                req = req.header("Authorization", auth);
+            }
         }
         if let Some(vid) = &self.visitor_id {
             req = req.header("X-Goog-Visitor-Id", vid);
@@ -138,6 +148,12 @@ impl InnerTube {
         req = req.json(&body);
 
         let resp = self.with_retry(req).await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            warn!(endpoint, client = client.client_name, %status, body = %body, "API non-success");
+            return Err(Error::HttpStatus { status: status.as_u16() });
+        }
         let value = resp.json::<Value>().await.map_err(Error::from)?;
         Ok(value)
     }
@@ -227,6 +243,9 @@ impl InnerTube {
 
     /// `player` — fetch playback / streaming data for a video ID.
     ///
+    /// `po_token` is only included for clients with `use_web_po_tokens = true`; pass `None` for
+    /// all other clients.
+    ///
     /// # Errors
     ///
     /// Propagates HTTP, auth, or JSON parsing errors.
@@ -237,6 +256,7 @@ impl InnerTube {
         video_id: &str,
         playlist_id: Option<&str>,
         signature_timestamp: Option<u32>,
+        po_token: Option<&str>,
     ) -> Result<PlayerResponse> {
         debug!("player {video_id}");
         let mut extra = json!({
@@ -254,7 +274,11 @@ impl InnerTube {
                 }
             });
         }
+        if let Some(token) = po_token.filter(|_| client.use_web_po_tokens) {
+            extra["serviceIntegrityDimensions"] = json!({ "poToken": token });
+        }
         let raw = self.post_raw("player", client, self.body(client, &extra)).await?;
+        debug!(client = client.client_name, raw = %raw, "player raw response");
         Ok(serde_json::from_value(raw)?)
     }
 

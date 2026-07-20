@@ -58,6 +58,12 @@ impl YouTube {
         self
     }
 
+    /// The visitor/session ID set via [`with_visitor_id`], if any.
+    #[must_use]
+    pub fn visitor_id(&self) -> Option<&str> {
+        self.inner.visitor_id.as_deref()
+    }
+
     /// True when a `SAPISID` / `__Secure-3PAPISID` cookie was provided.
     #[must_use]
     pub fn is_logged_in(&self) -> bool {
@@ -417,24 +423,59 @@ impl YouTube {
     ) -> Result<PlayerResponse> {
         let raw = self
             .inner
-            .player(&YouTubeClient::ANDROID, video_id, playlist_id, None)
+            .player(&YouTubeClient::MOBILE, video_id, playlist_id, None, None)
             .await?;
         Ok(raw)
     }
 
-    /// Fetch the best audio-only stream URL for a video.
+    /// Low-level player call — choose any client, pass an optional PoToken.
     ///
-    /// Tries `ANDROID_VR_1_43`, then `ANDROID`, then `ANDROID_VR_1_65` in sequence.
+    /// For WEB clients (`use_web_po_tokens = true`) pass the `po_token` from
+    /// `servo_webview::potoken::generate` as the player-request token.
+    ///
+    /// # Errors
+    ///
+    /// Propagates HTTP and parsing errors.
+    pub async fn player_raw(
+        &self,
+        client: &YouTubeClient,
+        video_id: &str,
+        signature_timestamp: Option<u32>,
+        po_token: Option<&str>,
+    ) -> Result<PlayerResponse> {
+        self.inner
+            .player(client, video_id, None, signature_timestamp, po_token)
+            .await
+    }
+
+    /// Fetch the best audio-only stream for a video.
+    ///
+    /// Returns `(data, is_cipher)`:
+    /// - `is_cipher = false` → `data` is a direct CDN URL.
+    /// - `is_cipher = true`  → `data` is a raw `signatureCipher` query string
+    ///   (`s=ENCRYPTED&sp=sig&url=BASE_URL`); caller must decrypt sig and apply nsig.
+    ///
+    /// Client fallback order:
+    /// 1. Direct-URL clients (ANDROID/VR/VISIONOS) — no sig/nsig needed.
+    /// 2. Cipher clients (TVHTML5, WEB_REMIX) — require sig decryption + nsig.
     ///
     /// # Errors
     ///
     /// Returns [`Error::AllClientsFailed`], [`Error::NotPlayable`], or [`Error::NoAudioFormat`]
     /// when no client yields a playable audio stream.
-    pub async fn audio_url(&self, video_id: &str) -> Result<String> {
-        // ANDROID (client_id 3) blocked with 400; VR clients use www.youtube.com and work.
+    pub async fn audio_stream(&self, video_id: &str) -> Result<(String, bool)> {
         const CLIENTS: &[YouTubeClient] = &[
-            YouTubeClient::ANDROID_VR_1_43,
+            YouTubeClient::ANDROID_MUSIC,     // yt-dlp primary for YTM on Linux, no PoToken
+            YouTubeClient::TV_EMBEDDED,       // embedded player, no PoToken
+            YouTubeClient::ANDROID_TESTSUITE, // PoToken bypass (yt-dlp/NewPipe)
+            YouTubeClient::IOS_MUSIC,
+            YouTubeClient::IOS,
+            YouTubeClient::MOBILE,
             YouTubeClient::ANDROID_VR_1_65,
+            YouTubeClient::ANDROID_VR_1_43,
+            YouTubeClient::VISIONOS,
+            YouTubeClient::TVHTML5,
+            YouTubeClient::WEB_REMIX,
         ];
 
         let mut last_err = Error::AllClientsFailed {
@@ -442,42 +483,64 @@ impl YouTube {
         };
 
         for client in CLIENTS {
-            match self.inner.player(client, video_id, None, None).await {
+            match self.inner.player(client, video_id, None, None, None).await {
                 Ok(resp) => {
                     let status = &resp.playability_status.status;
                     if status != "OK" {
+                        tracing::warn!(
+                            client = client.client_name,
+                            playability = %status,
+                            reason = resp.playability_status.reason.as_deref().unwrap_or(""),
+                            "not playable"
+                        );
                         last_err = Error::NotPlayable {
                             status: status.clone(),
-                            reason: resp
-                                .playability_status
-                                .reason
-                                .unwrap_or_default(),
+                            reason: resp.playability_status.reason.unwrap_or_default(),
                         };
                         continue;
                     }
-                    if let Some(fmt) = resp
-                        .streaming_data
-                        .as_ref()
-                        .and_then(|sd| sd.best_audio_format())
-                    {
-                        return fmt
-                            .url
-                            .clone()
-                            .ok_or(Error::NoAudioFormat {
-                                video_id: video_id.to_owned(),
-                            });
+                    let sd = resp.streaming_data.as_ref();
+                    let audio_only = sd.map(|s| s.adaptive_formats.iter().filter(|f| f.is_audio_only()).count()).unwrap_or(0);
+                    let direct = sd.map(|s| s.adaptive_formats.iter().filter(|f| f.is_audio_only() && f.has_direct_url()).count()).unwrap_or(0);
+                    let cipher = sd.map(|s| s.adaptive_formats.iter().filter(|f| f.is_audio_only() && f.signature_cipher.is_some()).count()).unwrap_or(0);
+                    tracing::debug!(client = client.client_name, audio_only, direct, cipher, "player OK");
+
+                    // Prefer direct URL (no sig/nsig needed).
+                    if let Some(fmt) = sd.and_then(|s| s.best_audio_format()) {
+                        tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, "direct audio format");
+                        return fmt.url.clone().map(|u| (u, false))
+                            .ok_or(Error::NoAudioFormat { video_id: video_id.to_owned() });
                     }
-                    last_err = Error::NoAudioFormat {
-                        video_id: video_id.to_owned(),
-                    };
+                    // Fall back to cipher format (WEB clients).
+                    if let Some(fmt) = sd.and_then(|s| s.best_cipher_audio_format()) {
+                        tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, "cipher audio format");
+                        return fmt.signature_cipher.clone().map(|c| (c, true))
+                            .ok_or(Error::NoAudioFormat { video_id: video_id.to_owned() });
+                    }
+                    last_err = Error::NoAudioFormat { video_id: video_id.to_owned() };
                 }
                 Err(e) => {
+                    tracing::warn!(client = client.client_name, error = %e, "player request failed");
                     last_err = e;
                 }
             }
         }
 
         Err(last_err)
+    }
+
+    /// Convenience wrapper that only returns direct-URL streams.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::AllClientsFailed`], [`Error::NotPlayable`], or [`Error::NoAudioFormat`].
+    pub async fn audio_url(&self, video_id: &str) -> Result<String> {
+        let (data, is_cipher) = self.audio_stream(video_id).await?;
+        if is_cipher {
+            Err(Error::NoAudioFormat { video_id: video_id.to_owned() })
+        } else {
+            Ok(data)
+        }
     }
 
     // ── Up-next / queue ──────────────────────────────────────────────────────

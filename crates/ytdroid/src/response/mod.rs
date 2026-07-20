@@ -498,6 +498,7 @@ impl StreamingData {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerResponse {
+    #[serde(default)]
     pub playability_status: PlayabilityStatus,
     pub streaming_data: Option<StreamingData>,
     pub video_details: Option<VideoDetails>,

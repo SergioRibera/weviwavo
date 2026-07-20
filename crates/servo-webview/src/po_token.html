@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en"><head><title></title><script>
+    // PAGE_DATA is replaced by the Rust HTTP server before serving.
+    const PAGE_DATA = "__PAGE_DATA__";
+
+    // ── BotGuard VM state ────────────────────────────────────────────────────
+    var bgVmFunctions = null;
+    var bgVm = null;
+    var bgProgram = null;
+    var poTokenMinter = null;
+
+    function loadBotGuard(challengeData) {
+      bgVm = window[challengeData.globalName];
+      bgProgram = challengeData.program;
+      bgVmFunctions = null;
+
+      if (!bgVm)
+        throw new Error('[BotGuardClient]: VM not found in the global object');
+      if (!bgVm.a)
+        throw new Error('[BotGuardClient]: Could not load program');
+
+      var vmFunctionsCallback = function(
+        asyncSnapshotFunction,
+        shutdownFunction,
+        passEventFunction,
+        checkCameraFunction
+      ) {
+        bgVmFunctions = {
+          asyncSnapshotFunction: asyncSnapshotFunction,
+          shutdownFunction: shutdownFunction,
+          passEventFunction: passEventFunction,
+          checkCameraFunction: checkCameraFunction
+        };
+      };
+
+      try {
+        bgVm.a(bgProgram, vmFunctionsCallback, true, undefined, function() {}, [[], []]);
+      } catch (e) {
+        throw new Error('[BotGuardClient]: Failed to execute program: ' + e.message);
+      }
+
+      return new Promise(function(resolve, reject) {
+        var attempts = 0;
+        var maxAttempts = 10000;
+        var checkInterval = setInterval(function() {
+          if (bgVmFunctions && bgVmFunctions.asyncSnapshotFunction) {
+            clearInterval(checkInterval);
+            resolve({ vmFunctions: bgVmFunctions, vm: bgVm, program: bgProgram });
+          } else if (attempts >= maxAttempts) {
+            clearInterval(checkInterval);
+            reject(new Error('[BotGuardClient]: Timeout waiting for asyncSnapshotFunction'));
+          }
+          attempts++;
+        }, 1);
+      });
+    }
+
+    function snapshot(botguard, args) {
+      return new Promise(function(resolve, reject) {
+        if (!botguard.vmFunctions || !botguard.vmFunctions.asyncSnapshotFunction) {
+          return reject(new Error('[BotGuardClient]: Async snapshot function not found'));
+        }
+        try {
+          botguard.vmFunctions.asyncSnapshotFunction(
+            function(response) { resolve(response); },
+            [args.contentBinding, args.signedTimestamp, args.webPoSignalOutput, args.skipPrivacyBuffer]
+          );
+        } catch (e) {
+          reject(new Error('[BotGuardClient]: Snapshot failed: ' + e.message));
+        }
+      });
+    }
+
+    function runBotGuard(challengeData) {
+      var interpreterJavascript = challengeData.interpreterJavascript.privateDoNotAccessOrElseSafeScriptWrappedValue;
+      if (interpreterJavascript) {
+        new Function(interpreterJavascript)();
+      } else {
+        throw new Error('[BotGuardClient]: Could not load VM - no interpreter JavaScript');
+      }
+      var webPoSignalOutput = [];
+      return loadBotGuard({
+        globalName: challengeData.globalName,
+        program: challengeData.program
+      }).then(function(botguard) {
+        return snapshot(botguard, { webPoSignalOutput: webPoSignalOutput });
+      }).then(function(botguardResponse) {
+        return { webPoSignalOutput: webPoSignalOutput, botguardResponse: botguardResponse };
+      });
+    }
+
+    async function createPoTokenMinter(webPoSignalOutput, integrityToken) {
+      var getMinter = webPoSignalOutput[0];
+      if (!getMinter) throw new Error('PMD:Undefined');
+      if (typeof getMinter !== 'function') throw new Error('PMD:NotFunction');
+      var minterResult = getMinter(integrityToken);
+      var mintCallback;
+      if (minterResult && typeof minterResult.then === 'function') {
+        mintCallback = await minterResult;
+      } else {
+        mintCallback = minterResult;
+      }
+      if (!mintCallback) throw new Error('APF:Undefined');
+      if (typeof mintCallback !== 'function') throw new Error('APF:NotFunction');
+      poTokenMinter = mintCallback;
+    }
+
+    async function obtainPoToken(identifier) {
+      if (!poTokenMinter) throw new Error('MNT:NotInit');
+      var mintResult = poTokenMinter(identifier);
+      var result;
+      if (mintResult && typeof mintResult.then === 'function') {
+        result = await mintResult;
+      } else {
+        result = mintResult;
+      }
+      if (!result) throw new Error('YNJ:Undefined');
+      if (!(result instanceof Uint8Array)) throw new Error('ODM:Invalid - got: ' + Object.prototype.toString.call(result));
+      return result;
+    }
+
+    // ── Orchestration ────────────────────────────────────────────────────────
+
+    function toBase64Url(u8) {
+      return btoa(String.fromCharCode.apply(null, Array.from(u8)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function init() {
+      // Step 1: obtain BotGuard challenge (Rust proxies to YouTube)
+      var createResp = await fetch('/bg/create', { method: 'POST' });
+      if (!createResp.ok) throw new Error('bg/create ' + createResp.status);
+      var challengeData = await createResp.json();
+
+      // Step 2: run BotGuard VM (pure JS, no network)
+      var bgResult = await runBotGuard(challengeData);
+
+      // Step 3: generate integrity token (Rust proxies to YouTube)
+      var genResp = await fetch('/bg/generateit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botguardResponse: bgResult.botguardResponse })
+      });
+      if (!genResp.ok) throw new Error('bg/generateit ' + genResp.status);
+      var tokenData = await genResp.json();
+
+      // Step 4: create minter once
+      var integrityToken = new Uint8Array(tokenData.integrityToken);
+      await createPoTokenMinter(bgResult.webPoSignalOutput, integrityToken);
+
+      // Step 5: mint tokens
+      // playerToken is bound to sessionId, streamingToken is bound to videoId
+      // (matches PoTokenGenerator.kt: streamingPot=generatePoToken(sessionId), playerPot=generatePoToken(videoId))
+      var enc = new TextEncoder();
+      var playerBytes = await obtainPoToken(enc.encode(PAGE_DATA.sessionId));
+      var streamingBytes = await obtainPoToken(enc.encode(PAGE_DATA.videoId));
+
+      // Step 6: report results to Rust
+      await fetch('/bg/done', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          player_token: toBase64Url(playerBytes),
+          streaming_token: toBase64Url(streamingBytes)
+        })
+      });
+    }
+
+    window.addEventListener('load', function() {
+      init().catch(function(err) {
+        var msg = (err && err.message) ? err.message : String(err);
+        console.error('[PoToken] fatal:', msg);
+        fetch('/bg/error', { method: 'POST', body: msg }).catch(function() {});
+      });
+    });
+</script></head><body></body></html>

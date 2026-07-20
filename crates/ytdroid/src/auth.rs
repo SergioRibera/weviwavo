@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// All Innertube requests go to music.youtube.com regardless of client type;
+/// SAPISIDHASH must be computed against this origin (Metrolist: hardcoded).
 const ORIGIN: &str = "https://music.youtube.com";
 
 /// Parse a browser cookie header string into a name→value map.
@@ -15,10 +17,9 @@ pub(crate) fn parse_cookies(cookie_str: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// Compute `SAPISIDHASH {ts}_{sha1}`.
+/// Compute `SAPISIDHASH {ts}_{sha1}` for `music.youtube.com`.
 ///
-/// Mirrors `InnerTube.kt`'s auth header computation exactly.
-/// Returns `None` when neither SAPISID nor __Secure-3PAPISID is in the cookie map.
+/// Returns `None` when neither SAPISID nor `__Secure-3PAPISID` is present.
 pub(crate) fn sapisidhash(cookies: &HashMap<String, String>) -> Option<String> {
     let sapisid = cookies
         .get("SAPISID")
