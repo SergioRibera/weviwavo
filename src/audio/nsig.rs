@@ -1,9 +1,62 @@
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use regex::Regex;
 use tokio::sync::OnceCell;
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+// ── Player config (Metrolist-compat player_configs.json) ──────────────────────
+
+/// Bundled known-player configurations: hash → (sig_expr, nclass, sts).
+/// `sig_expr` is a JS call like `"OI(34,7320,INPUT)"` where `INPUT` is the sig.
+static PLAYER_CONFIGS: OnceLock<HashMap<String, (String, String, u32)>> = OnceLock::new();
+
+const PLAYER_CONFIGS_JSON: &str = include_str!("player_configs.json");
+
+fn player_configs() -> &'static HashMap<String, (String, String, u32)> {
+    PLAYER_CONFIGS.get_or_init(|| {
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(PLAYER_CONFIGS_JSON) else {
+            tracing::warn!("failed to parse player_configs.json");
+            return HashMap::new();
+        };
+        let Some(players) = val.get("players").and_then(|v| v.as_object()) else {
+            return HashMap::new();
+        };
+        let mut map = HashMap::with_capacity(players.len() * 2);
+        for (hash, entry) in players {
+            let sig = entry.get("sig").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            let nclass = entry.get("nClass").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            let sts = entry.get("sts").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            // Insert primary hash and all aliases.
+            map.insert(hash.clone(), (sig.clone(), nclass.clone(), sts));
+            if let Some(aliases) = entry.get("aliases").and_then(|v| v.as_array()) {
+                for alias in aliases {
+                    if let Some(a) = alias.as_str() {
+                        map.insert(a.to_owned(), (sig.clone(), nclass.clone(), sts));
+                    }
+                }
+            }
+        }
+        tracing::debug!(count = map.len(), "player configs loaded");
+        map
+    })
+}
+
+fn player_hash_from_url(url: &str) -> Option<String> {
+    Regex::new(r"/player/([a-f0-9]{8})/")
+        .ok()?
+        .captures(url)?
+        .get(1)
+        .map(|m| m.as_str().to_owned())
+}
+
+/// Build a `g.__sig=function(__s){...}` injection from a sig expression like `"OI(34,7320,INPUT)"`.
+fn sig_injection_from_expr(expr: &str) -> Box<str> {
+    let call = expr.replace("INPUT", "__s");
+    format!("g.__sig=function(__s){{try{{return {call};}}catch(e){{return null;}}}};")
+        .into_boxed_str()
+}
 
 struct PlayerInfo {
     nfunc_js: Option<Box<str>>,
@@ -580,7 +633,8 @@ async fn player_info() -> &'static PlayerInfo {
         .get_or_init(|| async {
             let result = async {
                 let url = player_js_url().await?;
-                tracing::debug!(url, "fetching player JS");
+                let hash = player_hash_from_url(&url);
+                tracing::debug!(url, ?hash, "fetching player JS");
                 let js = shared_client()
                     .get(&url)
                     .send()
@@ -589,20 +643,36 @@ async fn player_info() -> &'static PlayerInfo {
                     .text()
                     .await
                     .ok()?;
-                Some(js)
+                Some((js, hash))
             }
             .await;
 
             match result {
-                Some(js) => {
+                Some((js, player_hash)) => {
+                    let configs = player_configs();
+                    let config = player_hash.as_deref().and_then(|h| configs.get(h));
+
+                    if let Some((sig_expr, nclass_name, sts)) = config {
+                        tracing::debug!(
+                            hash = player_hash.as_deref().unwrap_or("?"),
+                            sig_expr,
+                            nclass = nclass_name,
+                            sts,
+                            "player config found — using hardcoded sig/nClass"
+                        );
+                    }
+
                     let nfunc_js = extract_nfunc(&js).or_else(|| {
                         tracing::warn!("nfunc not found in player JS");
                         dump_player_diagnostics(&js);
                         None
                     });
-                    // When delegation trace fails, fall back to the nClass constructor approach.
+
+                    // nClass: regex first, then config fallback.
                     let nclass = if nfunc_js.is_none() {
-                        extract_nclass_from_qwo(&js)
+                        extract_nclass_from_qwo(&js).or_else(|| {
+                            config.map(|(_, nc, _)| nc.clone().into_boxed_str())
+                        })
                     } else {
                         None
                     };
@@ -611,21 +681,37 @@ async fn player_info() -> &'static PlayerInfo {
                         tracing::warn!("sig func not found in player JS");
                         None
                     });
-                    // Modern players: inject g.__sig into the IIFE when classic extraction fails.
+
+                    // sig injection: config first, then regex patterns.
                     let sig_injection = if sig_js.is_none() {
-                        extract_sig_injection(&js).or_else(|| {
-                            tracing::warn!("sig injection extraction failed");
-                            None
-                        })
+                        config
+                            .filter(|(sig_expr, _, _)| !sig_expr.is_empty())
+                            .map(|(sig_expr, _, _)| {
+                                let inj = sig_injection_from_expr(sig_expr);
+                                tracing::debug!(injection = &*inj, "sig injection from player config");
+                                inj
+                            })
+                            .or_else(|| {
+                                extract_sig_injection(&js).or_else(|| {
+                                    tracing::warn!("sig injection extraction failed");
+                                    None
+                                })
+                            })
                     } else {
                         None
                     };
 
-                    // Extract sig_timestamp before js is potentially moved.
-                    let sig_timestamp = extract_sig_timestamp(&js);
+                    // sig_timestamp: JS literal first, then config fallback.
+                    let sig_timestamp = {
+                        let from_js = extract_sig_timestamp(&js);
+                        if from_js == 19950 {
+                            config.map(|(_, _, sts)| *sts).unwrap_or(19950)
+                        } else {
+                            from_js
+                        }
+                    };
 
                     // Keep full player JS when nClass or sig-injection paths are needed.
-                    // Apply early-init patch so eval doesn't throw before g.yk / g.__sig are set.
                     let player_js = (nclass.is_some() || sig_injection.is_some())
                         .then(|| patch_player_js_for_eval(js).into_boxed_str());
 
