@@ -89,8 +89,7 @@ pub async fn fetch_audio_bytes(
     tracing::debug!(%status, content_type, "stream response headers");
 
     let bytes = resp.bytes().await.map_err(AudioError::Http)?;
-    let magic = bytes.get(..4).map(|b| format!("{b:02x?}")).unwrap_or_default();
-    tracing::debug!(bytes = bytes.len(), magic, "audio fetched");
+    tracing::debug!(bytes = bytes.len(), "audio fetched");
     let _ = quality;
     Ok(bytes.to_vec())
 }
