@@ -135,10 +135,12 @@ impl InnerTube {
             .header("Referer", MUSIC_REFERER)
             .header("User-Agent", client.user_agent);
 
-        if client.login_supported && !cookie_str.is_empty() {
+        if !cookie_str.is_empty() {
             req = req.header("Cookie", &cookie_str);
-            if let Some(auth) = sapisidhash(&self.cookies) {
-                req = req.header("Authorization", auth);
+            if client.login_supported {
+                if let Some(auth) = sapisidhash(&self.cookies) {
+                    req = req.header("Authorization", auth);
+                }
             }
         }
         if let Some(vid) = &self.visitor_id {
