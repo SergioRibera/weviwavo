@@ -25,6 +25,7 @@ impl App for MainApp {
         rect()
             .vertical()
             .expanded()
+            .content(Content::Flex)
             .theme_color()
             .background(Color::BLACK)
             .child(
@@ -60,21 +61,24 @@ impl App for MainApp {
                     })),
             )
             .child(
-                rect().expanded().child(
-                    ScrollView::new()
-                        .expanded()
-                        .direction(Direction::Vertical)
-                        .spacing(18.)
-                        .children(
-                            radio
-                                .feed
-                                .sections
-                                .clone()
-                                .into_iter()
-                                .map(Section::new)
-                                .map(IntoElement::into_element),
-                        ),
-                ),
+                rect()
+                    .width(Size::Fill)
+                    .height(Size::flex(1.0))
+                    .child(
+                        ScrollView::new()
+                            .expanded()
+                            .direction(Direction::Vertical)
+                            .spacing(18.)
+                            .children(
+                                radio
+                                    .feed
+                                    .sections
+                                    .clone()
+                                    .into_iter()
+                                    .map(Section::new)
+                                    .map(IntoElement::into_element),
+                            ),
+                    ),
             )
             .maybe_child(has_player.then(PlayerBar::default))
     }
