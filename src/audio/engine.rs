@@ -198,6 +198,7 @@ fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<Pro
         match cmd {
             RodioCmd::Play(bytes) => {
                 player.clear();
+                let _ = std::fs::write("/tmp/weviwavo-audio-debug.webm", &bytes);
                 let cursor = Cursor::new(bytes);
                 match Decoder::new(cursor) {
                     Ok(source) => {

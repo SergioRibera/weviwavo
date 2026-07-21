@@ -587,7 +587,7 @@ impl YouTube {
 
                     // Prefer direct URL (no sig/nsig needed — VISIONOS/VR path).
                     if let Some(fmt) = sd.and_then(|s| s.best_audio_format()) {
-                        tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, "direct audio format");
+                        tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, mime = fmt.mime_type.as_deref().unwrap_or("?"), "direct audio format");
                         let url = fmt.url.clone().ok_or(Error::NoAudioFormat {
                             video_id: video_id.to_owned(),
                         })?;

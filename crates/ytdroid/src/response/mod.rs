@@ -485,9 +485,24 @@ pub struct StreamingData {
 }
 
 impl StreamingData {
-    /// Best audio-only format with a direct URL, sorted by descending bitrate.
+    /// Best audio-only format with a direct URL.
+    ///
+    /// Prefers `audio/mp4` (AAC) over `audio/webm` (Opus) because symphonia's MKV/WebM
+    /// demuxer probe is unreliable in the rodio integration; isomp4 is solid.
+    /// Within each container preference, highest bitrate wins.
     #[must_use]
     pub fn best_audio_format(&self) -> Option<&StreamingFormat> {
+        let mp4 = self.adaptive_formats
+            .iter()
+            .filter(|f| {
+                f.is_audio_only()
+                    && f.has_direct_url()
+                    && f.mime_type.as_deref().map_or(false, |m| m.starts_with("audio/mp4"))
+            })
+            .max_by_key(|f| f.bitrate.unwrap_or(0));
+        if mp4.is_some() {
+            return mp4;
+        }
         self.adaptive_formats
             .iter()
             .filter(|f| f.is_audio_only() && f.has_direct_url())

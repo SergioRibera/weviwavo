@@ -76,13 +76,21 @@ pub async fn fetch_audio_bytes(
 
     let resp = req.send().await.map_err(AudioError::Http)?;
     let status = resp.status();
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_owned();
     if !status.is_success() {
-        tracing::warn!(%status, "stream fetch bad status");
+        tracing::warn!(%status, content_type, "stream fetch bad status");
         return Err(AudioError::HttpStatus { status: status.as_u16() });
     }
+    tracing::debug!(%status, content_type, "stream response headers");
 
     let bytes = resp.bytes().await.map_err(AudioError::Http)?;
-    tracing::debug!(bytes = bytes.len(), "audio fetched");
+    let magic = bytes.get(..4).map(|b| format!("{b:02x?}")).unwrap_or_default();
+    tracing::debug!(bytes = bytes.len(), magic, "audio fetched");
     let _ = quality;
     Ok(bytes.to_vec())
 }
