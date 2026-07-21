@@ -487,8 +487,7 @@ pub struct StreamingData {
 impl StreamingData {
     /// Best audio-only format with a direct URL.
     ///
-    /// Priority: `audio/mp4` (AAC) → `audio/mpeg` (MP3) → `audio/ogg` (Vorbis) → non-WebM fallback.
-    /// `audio/webm` (Opus) excluded: symphonia 0.5.x has no Opus codec.
+    /// Priority: `audio/mp4` (AAC) → `audio/mpeg` (MP3) → `audio/ogg` (Vorbis) → `audio/webm` (Opus) → any.
     #[must_use]
     pub fn best_audio_format(&self) -> Option<&StreamingFormat> {
         self.best_supported_audio(|f| f.is_audio_only() && f.has_direct_url())
@@ -496,7 +495,7 @@ impl StreamingData {
 
     /// Best audio-only format that uses `signatureCipher` (WEB clients).
     ///
-    /// Same MIME priority as [`best_audio_format`]: mp4 → mpeg → ogg → non-WebM fallback.
+    /// Same MIME priority as [`best_audio_format`]: mp4 → mpeg → ogg → webm → any.
     #[must_use]
     pub fn best_cipher_audio_format(&self) -> Option<&StreamingFormat> {
         self.best_supported_audio(|f| f.is_audio_only() && f.signature_cipher.is_some())
@@ -504,7 +503,7 @@ impl StreamingData {
 
     fn best_supported_audio(&self, base: impl Fn(&StreamingFormat) -> bool) -> Option<&StreamingFormat> {
         let audio = || self.adaptive_formats.iter().filter(|f| base(f));
-        for prefix in &["audio/mp4", "audio/mpeg", "audio/ogg"] {
+        for prefix in &["audio/mp4", "audio/mpeg", "audio/ogg", "audio/webm"] {
             let best = audio()
                 .filter(|f| f.mime_type.as_deref().map_or(false, |m| m.starts_with(prefix)))
                 .max_by_key(|f| f.bitrate.unwrap_or(0));
@@ -512,10 +511,7 @@ impl StreamingData {
                 return best;
             }
         }
-        // Last resort: anything except WebM (Opus not supported by symphonia 0.5.x).
-        audio()
-            .filter(|f| !f.mime_type.as_deref().map_or(false, |m| m.starts_with("audio/webm")))
-            .max_by_key(|f| f.bitrate.unwrap_or(0))
+        audio().max_by_key(|f| f.bitrate.unwrap_or(0))
     }
 }
 

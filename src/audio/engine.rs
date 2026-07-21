@@ -177,6 +177,10 @@ async fn handle_command(
         }
         AudioCommand::SetVolume(vol) => {
             rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
+            if vol > 0.0 {
+                radio.write_channel(DataChannel::Player).player.volume = vol;
+                tokio::task::spawn_blocking(move || crate::prefs::save_volume(vol));
+            }
         }
     }
 }

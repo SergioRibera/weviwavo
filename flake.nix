@@ -57,6 +57,7 @@
             with pkgs;
             [
               pkg-config
+              cmake
               python3
               makeWrapper
               removeReferencesTo
@@ -133,6 +134,7 @@
               git-cliff
 
               pkg-config
+              cmake
               wayland
               python3
             ]

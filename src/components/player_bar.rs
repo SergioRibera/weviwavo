@@ -59,6 +59,7 @@ impl Component for PlayerBar {
         let album = p.album.clone();
         let year = p.year.clone();
         let thumbnail_url = p.thumbnail_url.clone();
+        let volume = p.volume;
         let audio_cmd = state.audio_cmd.clone();
 
         let mut is_muted = use_state(|| false);
@@ -83,13 +84,13 @@ impl Component for PlayerBar {
 
         rect()
             .vertical()
-            .width(Size::Fill)
+            .width(Size::percent(100.))
             .background(Color::from_hex("#0F0F0F").unwrap())
             // seek bar
             .child({
                 let audio_cmd = audio_cmd.clone();
                 rect()
-                    .width(Size::Fill)
+                    .width(Size::percent(100.))
                     .height(Size::px(3.))
                     .background(Color::from_hex("#2D2D2D").unwrap())
                     .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
@@ -117,7 +118,7 @@ impl Component for PlayerBar {
             .child(
                 rect()
                     .horizontal()
-                    .width(Size::Fill)
+                    .width(Size::percent(100.))
                     .height(Size::px(64.))
                     .padding(Gaps::new_symmetric(0., 16.))
                     .cross_align(Alignment::Center)
@@ -279,7 +280,7 @@ impl Component for PlayerBar {
                                     .on_press(move |_| {
                                         let Some(tx) = audio_cmd.clone() else { return };
                                         if muted {
-                                            tx.try_send(AudioCommand::SetVolume(1.0)).ok();
+                                            tx.try_send(AudioCommand::SetVolume(volume)).ok();
                                             is_muted.set(false);
                                         } else {
                                             tx.try_send(AudioCommand::SetVolume(0.0)).ok();

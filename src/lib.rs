@@ -12,6 +12,7 @@ mod components;
 pub use audio::nsig::{decrypt_sig, decrypt_url, signature_timestamp};
 mod cookies;
 mod dialog;
+mod prefs;
 mod startup;
 mod utils;
 

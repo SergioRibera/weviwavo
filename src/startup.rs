@@ -3,13 +3,17 @@ use ytdroid::client::Locale;
 use ytdroid::YouTube;
 
 use crate::app::{Data, DataChannel};
-use crate::audio::{AudioEngine, run_audio_engine};
+use crate::audio::{AudioCommand, AudioEngine, run_audio_engine};
 
 pub async fn run_startup(mut radio: RadioStation<Data, DataChannel>) {
     let (engine, audio_rx) = AudioEngine::new();
-    radio
-        .write_channel(DataChannel::Player)
-        .audio_cmd = Some(engine.sender());
+    let sender = engine.sender();
+    {
+        let mut state = radio.write_channel(DataChannel::Player);
+        state.audio_cmd = Some(sender.clone());
+        state.player.volume = crate::prefs::load_volume();
+    }
+    sender.try_send(AudioCommand::SetVolume(radio.read().player.volume)).ok();
 
     tokio::join!(
         startup_inner(radio),

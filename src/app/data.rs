@@ -5,7 +5,7 @@ use ytdroid::YouTube;
 
 use crate::audio::AudioCommand;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct PlayerState {
     pub is_playing: bool,
     pub current_secs: f32,
@@ -15,6 +15,23 @@ pub struct PlayerState {
     pub album: String,
     pub year: Option<String>,
     pub thumbnail_url: String,
+    pub volume: f32,
+}
+
+impl Default for PlayerState {
+    fn default() -> Self {
+        Self {
+            is_playing: false,
+            current_secs: 0.0,
+            total_secs: 0.0,
+            title: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            year: None,
+            thumbnail_url: String::new(),
+            volume: 1.0,
+        }
+    }
 }
 
 #[derive(Default, Clone)]

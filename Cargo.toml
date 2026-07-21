@@ -40,7 +40,7 @@ dirs = "5"
 bytes = "1"
 ytdroid = { path = "./crates/ytdroid" }
 thiserror = "2"
-rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-all"] }
+rodio = { git = "https://github.com/RustAudio/rodio", default-features = false, features = ["playback", "symphonia-all", "symphonia-libopus"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 serde_json = "1"
 sha1_smol = "1"
