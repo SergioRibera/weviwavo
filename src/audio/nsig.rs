@@ -7,9 +7,14 @@ static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
 struct PlayerInfo {
     nfunc_js: Option<Box<str>>,
-    /// Full player JS, kept only for QWO-style nfunc so undefined symbols can be resolved.
+    /// nClass name (e.g. "yk") for QWO players when delegation trace fails.
+    nclass: Option<Box<str>>,
+    /// Full player JS for nClass nsig and/or sig-injection paths.
     player_js: Option<Box<str>>,
+    /// Classic self-contained sig snippet (old players).
     sig_js: Option<Box<str>>,
+    /// Modern players: `g.__sig=function(__s){...};` injected before IIFE close.
+    sig_injection: Option<Box<str>>,
     sig_timestamp: u32,
 }
 
@@ -109,39 +114,41 @@ fn extract_helper_obj(player_js: &str, sym: &str) -> Option<String> {
     ))
 }
 
-/// Newer player: QWO wraps `g.yk` which contains the actual nfunc.
+/// Newer player: a QWO wrapper function calls `(new g.CLASS(url, arg)).get("n")`.
+/// Variable names (`C`/`N`, `T`/`S`, etc.) change per player version — match flexibly.
 ///
-/// Primary path: parse g.yk's delegation chain `return nN[H[idx]](...)` to locate the
-/// actual transform function in the `nN` array — gives a tiny, browser-dep-free snippet.
-///
-/// Fallback: QWO fake-path URL trick with a large context window + browser stubs.
+/// Primary path: parse the nClass delegation chain to get a self-contained snippet.
+/// Fallback: return None so the nClass eval path is used instead.
 fn extract_nfunc_via_qwo(player_js: &str) -> Option<Box<str>> {
-    let qwo_marker = "=function(N){try{var S=(new g.";
-    let qwo_eq_pos = player_js.find(qwo_marker)?;
+    // Match: =function(VAR){try{var INNER=(new g.CLASS(
+    // Captures class name (group 1).
+    let qwo_re = Regex::new(
+        r"=function\([A-Za-z0-9$_]+\)\{try\{var [A-Za-z0-9$_]+=\(new g\.([a-zA-Z0-9$_]+)\(",
+    )
+    .ok()?;
+    let qwo_caps = qwo_re.captures(player_js)?;
+    let qwo_match = qwo_caps.get(0)?;
+    let qwo_eq_pos = qwo_match.start();
+    let gyk_name = qwo_caps[1].to_owned(); // e.g. "uS", "yk", …
 
-    // Walk back to get the QWO function name.
     let name_start = player_js[..qwo_eq_pos]
         .rfind(|c: char| !c.is_alphanumeric() && c != '$' && c != '_')
         .map(|i| i + 1)
         .unwrap_or(0);
     let qwo_name = player_js[name_start..qwo_eq_pos].to_owned();
 
-    // Extract QWO function end position (needed for fallback chunk boundary).
-    let fn_kw_off = player_js[qwo_eq_pos..].find("function")?;
-    let fn_start = qwo_eq_pos + fn_kw_off;
-    let brace_pos = fn_start + player_js[fn_start..].find('{')?;
-    let qwo_close = find_closing(player_js, brace_pos + 1, '{', '}')?;
+    tracing::debug!(qwo_name, nclass = gyk_name, "QWO function found");
 
-    // Find g.yk definition — search backwards from QWO.
+    // Find g.CLASS definition before the QWO function.
     let before_qwo = &player_js[..qwo_eq_pos];
-    let gyk_pos = before_qwo.rfind("g.yk=")?;
+    let gyk_pattern = format!("g.{gyk_name}=");
+    let gyk_pos = before_qwo.rfind(&gyk_pattern)?;
 
     {
         let hi = (gyk_pos + 300).min(player_js.len());
-        tracing::debug!(snippet = &player_js[gyk_pos..hi], "g.yk definition");
+        tracing::debug!(snippet = &player_js[gyk_pos..hi], "g.{gyk_name} definition");
     }
 
-    // Try to trace the delegation chain: g.yk delegates to nN[H[idx]].
     let gyk_brace = gyk_pos + player_js[gyk_pos..].find('{')?;
     let gyk_close = find_closing(player_js, gyk_brace + 1, '{', '}')?;
     let gyk_body = &player_js[gyk_brace..=gyk_close];
@@ -151,29 +158,25 @@ fn extract_nfunc_via_qwo(player_js: &str) -> Option<Box<str>> {
         return Some(func_src);
     }
 
-    // Return only the tiny wrapper. The full player JS is eval'd separately at decrypt time
-    // (stored in PlayerInfo.player_js), so all of QWO's dependencies are already in scope.
-    let wrapper = format!(
-        r#"function __nfunc(n) {{
-    var fakeUrl = "https://x.invalid/n/" + encodeURIComponent(n) + "/x";
-    try {{
-        var result = {qwo_name}(fakeUrl);
-        if (!result) return null;
-        var m = result.match(/\/n\/([^\/]+)\//);
-        return m ? decodeURIComponent(m[1]) : null;
-    }} catch(e) {{ return null; }}
-}}"#
-    );
+    tracing::debug!(qwo_name, nclass = gyk_name, "delegation trace failed; nClass path will be used");
+    None
+}
 
-    tracing::debug!(qwo_name, "QWO-style nfunc wrapper built");
-    Some(wrapper.into_boxed_str())
+/// Extract the nClass name from `(new g.CLASS(arg)).get("n")`.
+/// Variable names change per player version — match flexibly.
+fn extract_nclass_from_qwo(player_js: &str) -> Option<Box<str>> {
+    let re = Regex::new(r#"\(new g\.([a-zA-Z0-9$_]+)\([^)]*\)\)\.get\("n"\)"#).ok()?;
+    let caps = re.captures(player_js)?;
+    let name = caps[1].to_owned();
+    tracing::debug!(nclass = name, "extracted nClass via .get(\"n\") pattern");
+    Some(name.into())
 }
 
 /// Parse `g.yk = function(N,S){ return nN[H[idx]](this,...) }` and extract the
 /// actual transform function at `nN[H[idx]]` as a self-contained `__nfunc` snippet.
 ///
-/// `gyk_pos` anchors the search — H and nN are looked up in the 120 KB window before g.yk
-/// to avoid matching unrelated short-named variables earlier in the player.
+/// Searches the entire player JS before `g.yk` — the H/nN definitions can be hundreds of
+/// kilobytes away in minified code.
 fn trace_delegation_nfunc(player_js: &str, gyk_body: &str, gyk_pos: usize) -> Option<Box<str>> {
     // Match: return OUTER[INNER[INDEX]]  (e.g. nN[H[18]])
     let re = Regex::new(
@@ -187,35 +190,38 @@ fn trace_delegation_nfunc(player_js: &str, gyk_body: &str, gyk_pos: usize) -> Op
 
     tracing::debug!(nn_name, h_name, h_idx, "delegation pattern found in g.yk");
 
-    // Search for H and nN in a window around g.yk to avoid false matches.
-    let window_start = gyk_pos.saturating_sub(120_000);
-    let search_region = &player_js[window_start..];
-
     // Resolve H[h_idx] → integer index into nN.
+    // Take the last definition before g.yk — handles reassignment and closures.
     let h_arr_re = Regex::new(&format!(
         r"(?:var\s+|let\s+|const\s+)?{}\s*=\s*\[",
         regex::escape(&h_name)
     ))
     .ok()?;
-    // Use the LAST match before gyk_pos (rfind semantics via find_iter + last).
     let h_matches: Vec<_> = h_arr_re
-        .find_iter(search_region)
-        .filter(|m| window_start + m.start() < gyk_pos)
+        .find_iter(player_js)
+        .filter(|m| m.start() < gyk_pos)
         .collect();
     tracing::debug!(
         count = h_matches.len(),
         h_name,
-        window_kb = 120,
-        "H array search results"
+        gyk_kb = gyk_pos / 1024,
+        "H array search results (full file before g.yk)"
     );
     let h_match = match h_matches.into_iter().last() {
         Some(m) => m,
         None => {
-            tracing::warn!(h_name, "H array not found in 120 KB window before g.yk");
+            // Extra diagnostic: show what the h_name looks like in context near g.yk.
+            let ctx_lo = gyk_pos.saturating_sub(500);
+            let ctx_hi = (gyk_pos + 100).min(player_js.len());
+            tracing::warn!(
+                h_name,
+                gyk_ctx = &player_js[ctx_lo..ctx_hi],
+                "H array literal not found before g.yk"
+            );
             return None;
         }
     };
-    let h_abs = window_start + h_match.start();
+    let h_abs = h_match.start();
     let h_bracket = match player_js[h_abs..].find('[') {
         Some(off) => h_abs + off,
         None => {
@@ -234,6 +240,7 @@ fn trace_delegation_nfunc(player_js: &str, gyk_body: &str, gyk_pos: usize) -> Op
     tracing::debug!(
         preview = &h_contents[..h_contents.len().min(300)],
         len = h_contents.len(),
+        h_pos_kb = h_abs / 1024,
         "H array contents"
     );
 
@@ -262,18 +269,18 @@ fn trace_delegation_nfunc(player_js: &str, gyk_body: &str, gyk_pos: usize) -> Op
     ))
     .ok()?;
     let nn_matches: Vec<_> = nn_arr_re
-        .find_iter(search_region)
-        .filter(|m| window_start + m.start() < gyk_pos)
+        .find_iter(player_js)
+        .filter(|m| m.start() < gyk_pos)
         .collect();
     tracing::debug!(count = nn_matches.len(), nn_name, "nN array search results");
     let nn_match = match nn_matches.into_iter().last() {
         Some(m) => m,
         None => {
-            tracing::warn!(nn_name, "nN array not found in 120 KB window before g.yk");
+            tracing::warn!(nn_name, "nN array not found in player JS before g.yk");
             return None;
         }
     };
-    let nn_abs = window_start + nn_match.start();
+    let nn_abs = nn_match.start();
     let nn_bracket = nn_abs + player_js[nn_abs..].find('[')?;
     let nn_close = find_closing(player_js, nn_bracket + 1, '[', ']')?;
     let nn_contents = &player_js[nn_bracket + 1..nn_close];
@@ -368,9 +375,36 @@ fn extract_nfunc(player_js: &str) -> Option<Box<str>> {
 
 /// Extract the signature decryption function (for `signatureCipher` formats).
 ///
-/// Returns a self-contained JS snippet: `function(sig){...}` that decrypts one sig string.
+/// Returns a self-contained JS snippet: `function __sig(a){...}` that decrypts one sig string.
 fn extract_sig_func(player_js: &str) -> Option<Box<str>> {
-    // Call-site patterns — find the sig-fn name.
+    // 2025/2026 patterns: sig fn takes a numeric constant as first arg.
+    // e.g. `&&(z=hJ(6,decodeURIComponent(h.s))` → name=hJ, const=6.
+    let sig_with_const_patterns = [
+        // April 2026: FUNC(NUM, decodeURIComponent(h.s))
+        r"&&\s*\([a-zA-Z0-9$_]+=([a-zA-Z0-9$_]{2,4})\((\d+),\s*decodeURIComponent\([a-zA-Z0-9$_]+\.[a-z]\)",
+        // 2025+: FUNC(NUM, decodeURIComponent(VAR))
+        r"&&\s*\([a-zA-Z0-9$_]+=([a-zA-Z0-9$_]{2,4})\((\d+),\s*decodeURIComponent\([a-zA-Z0-9$_]+\)",
+    ];
+    for pat in &sig_with_const_patterns {
+        if let Some(caps) = Regex::new(pat).ok().and_then(|re| re.captures(player_js)) {
+            let sig_name = caps[1].to_owned();
+            let const_arg = caps[2].to_owned();
+            tracing::debug!(sig_name, const_arg, "sig-transform (const-arg pattern) located");
+            let fn_src = extract_named_func(player_js, &sig_name)?;
+            let helper_src = Regex::new(r"([a-zA-Z0-9$_]{2,4})\.[a-zA-Z0-9$_]+\(")
+                .ok()
+                .and_then(|re| re.captures(&fn_src))
+                .and_then(|c| extract_helper_obj(player_js, &c[1].to_owned()));
+            let prefix = helper_src.as_deref().unwrap_or("");
+            let full = format!(
+                "{prefix}function __sig(a){{\n{fn_src}\nreturn {sig_name}({const_arg},a);\n}}"
+            );
+            tracing::debug!(len = full.len(), "sig func (const-arg) extracted");
+            return Some(full.into_boxed_str());
+        }
+    }
+
+    // Classic patterns: sig fn takes just the sig string.
     let sig_name = [
         r#"\.set\("sig"\s*,\s*([a-zA-Z0-9$_]{2,4})\([a-zA-Z0-9$_]+\.get\("s"\)\)"#,
         r#"\.sig\|\|([a-zA-Z0-9$_]{2,4})\(decodeURIComponent"#,
@@ -378,9 +412,12 @@ fn extract_sig_func(player_js: &str) -> Option<Box<str>> {
         r#"\.set\("signature"\s*,\s*([a-zA-Z0-9$_]{2,4})\(b\)"#,
         r#"a=([a-zA-Z0-9$_]{2,4})\(decodeURIComponent\(a\.get\("s"\)"#,
         r#"([a-zA-Z0-9$_]{2,4})\(decodeURIComponent\(h\.s\)\)"#,
-        // Broader: assignment to sig from a 2-4 char fn
         r#""signature",([a-zA-Z0-9$_]{2,4})\("#,
         r#"\.set\("signature",([a-zA-Z0-9$_]{2,4})\("#,
+        // Broader: encodeURIComponent(FUNC(sig))
+        r#"\b[cs]\s*&&\s*[a-z]+\.set\([^,]+,\s*encodeURIComponent\(([a-zA-Z0-9$_]{2,4})\("#,
+        r#"\b[a-zA-Z0-9]+\s*&&\s*[a-zA-Z0-9]+\.set\([^,]+,\s*encodeURIComponent\(([a-zA-Z0-9$_]{2,4})\("#,
+        r#"\bm=([a-zA-Z0-9$_]{2,})\(decodeURIComponent\(h\.s\)\)"#,
     ]
     .iter()
     .find_map(|pat| {
@@ -394,17 +431,65 @@ fn extract_sig_func(player_js: &str) -> Option<Box<str>> {
 
     let fn_src = extract_named_func(player_js, &sig_name)?;
 
-    // The sig function references a helper object; find and extract it too.
-    let helper_name = Regex::new(r"([a-zA-Z0-9$_]{2,4})\.[a-zA-Z0-9$_]+\(a,")
-        .ok()?
-        .captures(&fn_src)?[1]
-        .to_owned();
+    let helper_src = Regex::new(r"([a-zA-Z0-9$_]{2,4})\.[a-zA-Z0-9$_]+\(a,")
+        .ok()
+        .and_then(|re| re.captures(&fn_src))
+        .and_then(|c| extract_helper_obj(player_js, &c[1].to_owned()));
+    let prefix = helper_src.as_deref().unwrap_or("");
 
-    let helper_src = extract_helper_obj(player_js, &helper_name)?;
-
-    let full = format!("{helper_src};\nfunction __sig(a){{\n{fn_src}\nreturn {sig_name}(a);\n}}");
+    let full = format!("{prefix}\nfunction __sig(a){{\n{fn_src}\nreturn {sig_name}(a);\n}}");
     tracing::debug!(len = full.len(), "sig func extracted");
     Some(full.into_boxed_str())
+}
+
+/// Modern 2025+ players: find `R=OUTER(C1,C2,INNER(C3,C4,VAR.s))…(P,ENCODE(C5,C6,R))` and
+/// produce a `g.__sig=function(__s){…};` snippet to inject before the IIFE close.
+fn extract_sig_injection(player_js: &str) -> Option<Box<str>> {
+    // Pattern A: 3-function chain — outer(c1,c2, inner(c3,c4, sig)) → encode(c5,c6, result)
+    let pat_a = Regex::new(
+        r"R=([A-Za-z0-9$_]{1,4})\((\d+),(\d+),([A-Za-z0-9$_]{1,4})\((\d+),(\d+),[^)]+\.s\)\).{0,60}\(P,([A-Za-z0-9$_]{1,4})\((\d+),(\d+),R\)\)"
+    ).ok()?;
+    if let Some(caps) = pat_a.captures(player_js) {
+        let (f1, c1, c2) = (&caps[1], &caps[2], &caps[3]);
+        let (f2, c3, c4) = (&caps[4], &caps[5], &caps[6]);
+        let (f3, c5, c6) = (&caps[7], &caps[8], &caps[9]);
+        tracing::debug!(f1, c1, c2, f2, c3, c4, f3, c5, c6, "sig injection (3-func) found");
+        let inj = format!(
+            "g.__sig=function(__s){{try{{return {f3}({c5},{c6},{f1}({c1},{c2},{f2}({c3},{c4},__s)));}}catch(e){{return null;}}}};"
+        );
+        return Some(inj.into_boxed_str());
+    }
+
+    // Pattern B: 2-function chain, no encode step — outer(c1,c2, inner(c3,c4, sig))
+    let pat_b = Regex::new(
+        r"R=([A-Za-z0-9$_]{1,4})\((\d+),(\d+),([A-Za-z0-9$_]{1,4})\((\d+),(\d+),[^)]+\.s\)\).{0,60}\(P,R\)"
+    ).ok()?;
+    if let Some(caps) = pat_b.captures(player_js) {
+        let (f1, c1, c2) = (&caps[1], &caps[2], &caps[3]);
+        let (f2, c3, c4) = (&caps[4], &caps[5], &caps[6]);
+        tracing::debug!(f1, c1, c2, f2, c3, c4, "sig injection (2-func) found");
+        let inj = format!(
+            "g.__sig=function(__s){{try{{return {f1}({c1},{c2},{f2}({c3},{c4},__s));}}catch(e){{return null;}}}};"
+        );
+        return Some(inj.into_boxed_str());
+    }
+
+    // Pattern C: single instrumented call — f(c1, c2, sig) with encode
+    let pat_c = Regex::new(
+        r"R=([A-Za-z0-9$_]{1,4})\((\d+),(\d+),[^)]+\.s\).{0,60}\(P,([A-Za-z0-9$_]{1,4})\((\d+),(\d+),R\)\)"
+    ).ok()?;
+    if let Some(caps) = pat_c.captures(player_js) {
+        let (f1, c1, c2) = (&caps[1], &caps[2], &caps[3]);
+        let (f3, c5, c6) = (&caps[4], &caps[5], &caps[6]);
+        tracing::debug!(f1, c1, c2, f3, c5, c6, "sig injection (1-func+encode) found");
+        let inj = format!(
+            "g.__sig=function(__s){{try{{return {f3}({c5},{c6},{f1}({c1},{c2},__s));}}catch(e){{return null;}}}};"
+        );
+        return Some(inj.into_boxed_str());
+    }
+
+    tracing::warn!("sig injection patterns all failed");
+    None
 }
 
 fn extract_sig_timestamp(player_js: &str) -> u32 {
@@ -472,6 +557,24 @@ fn dump_player_diagnostics(js: &str) {
     }
 }
 
+/// Pre-initialize IIFE-scoped vars that are assigned late (after a throw point).
+///
+/// `k4=window` is assigned at offset ~1.65 MB but `qN` reads `k4` at ~1.4 MB.
+/// JS `var` hoisting means `k4` is `undefined` until the assignment runs —
+/// that causes "Context has not been set and window is undefined." to throw and
+/// stop execution before g.yk (~2.14 MB) and g.__sig (near end) are defined.
+fn patch_player_js_for_eval(js: String) -> String {
+    // `var window=this` makes window=_yt_player={} inside the IIFE — window.document etc
+    // are undefined, causing throws mid-IIFE before g.yk / g.__sig are reached.
+    // Replace with globalThis so our BROWSER_STUBS are visible as window.* inside the IIFE.
+    // Also pre-assign k4 (read by qN at ~1.4 MB, normally set at ~1.65 MB).
+    js.replacen(
+        "(function(g){var window=this;",
+        "(function(g){var window=globalThis;k4=globalThis;",
+        1,
+    )
+}
+
 async fn player_info() -> &'static PlayerInfo {
     PLAYER_INFO
         .get_or_init(|| async {
@@ -497,21 +600,40 @@ async fn player_info() -> &'static PlayerInfo {
                         dump_player_diagnostics(&js);
                         None
                     });
-                    // Keep full player JS only when the QWO wrapper needs it to
-                    // resolve undefined references at eval time.
-                    let is_qwo = nfunc_js.as_deref().map_or(false, |s| s.contains("__nfunc"));
-                    let player_js = is_qwo.then(|| js.clone().into_boxed_str());
+                    // When delegation trace fails, fall back to the nClass constructor approach.
+                    let nclass = if nfunc_js.is_none() {
+                        extract_nclass_from_qwo(&js)
+                    } else {
+                        None
+                    };
 
                     let sig_js = extract_sig_func(&js).or_else(|| {
                         tracing::warn!("sig func not found in player JS");
                         None
                     });
+                    // Modern players: inject g.__sig into the IIFE when classic extraction fails.
+                    let sig_injection = if sig_js.is_none() {
+                        extract_sig_injection(&js).or_else(|| {
+                            tracing::warn!("sig injection extraction failed");
+                            None
+                        })
+                    } else {
+                        None
+                    };
+
+                    // Extract sig_timestamp before js is potentially moved.
                     let sig_timestamp = extract_sig_timestamp(&js);
-                    PlayerInfo { nfunc_js, player_js, sig_js, sig_timestamp }
+
+                    // Keep full player JS when nClass or sig-injection paths are needed.
+                    // Apply early-init patch so eval doesn't throw before g.yk / g.__sig are set.
+                    let player_js = (nclass.is_some() || sig_injection.is_some())
+                        .then(|| patch_player_js_for_eval(js).into_boxed_str());
+
+                    PlayerInfo { nfunc_js, nclass, player_js, sig_js, sig_injection, sig_timestamp }
                 }
                 None => {
                     tracing::warn!("failed to fetch player JS");
-                    PlayerInfo { nfunc_js: None, player_js: None, sig_js: None, sig_timestamp: 19950 }
+                    PlayerInfo { nfunc_js: None, nclass: None, player_js: None, sig_js: None, sig_injection: None, sig_timestamp: 19950 }
                 }
             }
         })
@@ -626,60 +748,115 @@ var IntersectionObserver = function(cb, opts){ this.observe=function(){}; this.d
 var MediaSource = { isTypeSupported: function(){ return false; } };
 var HTMLVideoElement = function(){};
 var CustomEvent = function(type, opts){ this.type=type; this.detail=(opts&&opts.detail)||null; };
+// _yt_player is the IIFE argument — g.* properties set inside survive even if the IIFE throws.
+var _yt_player = {};
+var URLSearchParams = globalThis.URLSearchParams || function(init) {
+    this._p = {};
+    if (typeof init === 'string') {
+        var s = init.charAt(0) === '?' ? init.slice(1) : init;
+        var pairs = s.split('&');
+        for (var i = 0; i < pairs.length; i++) {
+            var eq = pairs[i].indexOf('=');
+            if (eq >= 0) {
+                var k = decodeURIComponent(pairs[i].slice(0, eq).replace(/\+/g, ' '));
+                var v = decodeURIComponent(pairs[i].slice(eq + 1).replace(/\+/g, ' '));
+                if (!this._p[k]) { this._p[k] = []; }
+                this._p[k].push(v);
+            }
+        }
+    }
+    this.get = function(k) { return (this._p[k] && this._p[k].length) ? this._p[k][0] : null; };
+    this.has = function(k) { return Object.prototype.hasOwnProperty.call(this._p, k); };
+    this.set = function(k, v) { this._p[k] = [String(v)]; };
+    this.append = function(k, v) { if (!this._p[k]) { this._p[k] = []; } this._p[k].push(String(v)); };
+    this.delete = function(k) { delete this._p[k]; };
+    this.toString = function() {
+        var out = [];
+        for (var k in this._p) {
+            if (Object.prototype.hasOwnProperty.call(this._p, k)) {
+                for (var i = 0; i < this._p[k].length; i++) {
+                    out.push(encodeURIComponent(k) + '=' + encodeURIComponent(this._p[k][i]));
+                }
+            }
+        }
+        return out.join('&');
+    };
+};
 "#;
 
 /// Decrypt the YouTube CDN `n` throttling parameter using the player JS nfunc.
 async fn decrypt_nsig(encrypted: &str) -> Option<String> {
     let info = player_info().await;
-    let nfunc = info.nfunc_js.as_deref()?.to_owned();
     let encrypted = encrypted.to_owned();
-    let is_qwo = nfunc.contains("__nfunc");
-    let player_js = is_qwo
-        .then(|| info.player_js.as_deref().map(str::to_owned))
+
+    if let Some(nfunc) = info.nfunc_js.as_deref() {
+        // Self-contained snippet from delegation trace or old-style extraction.
+        // Delegation trace produces `function __nfunc(n){...}`; old-style is a raw function.
+        let nfunc = nfunc.to_owned();
+        return tokio::task::spawn_blocking(move || {
+            let rt = rquickjs::Runtime::new().ok()?;
+            let ctx = rquickjs::Context::full(&rt).ok()?;
+            ctx.with(|ctx| {
+                let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
+                let n_json = serde_json::to_string(&encrypted).ok()?;
+                let code = if nfunc.contains("__nfunc") {
+                    format!("{nfunc}\n__nfunc({n_json})")
+                } else {
+                    format!("({nfunc})({n_json})")
+                };
+                ctx.eval::<rquickjs::Value, _>(code.as_str())
+                    .ok()?
+                    .as_string()
+                    .and_then(|s| s.to_string().ok())
+            })
+        })
+        .await
+        .ok()
         .flatten();
+    }
+
+    // nClass path (Metrolist-style): eval full player JS (tolerate throw), then call
+    // `new _yt_player[nclass](url, true)` — the class is set on _yt_player before any throw.
+    let (Some(nclass), Some(player_js)) =
+        (info.nclass.as_deref(), info.player_js.as_deref())
+    else {
+        tracing::warn!("no nfunc or nclass available for nsig decryption");
+        return None;
+    };
+    let nclass = nclass.to_owned();
+    let player_js = player_js.to_owned();
 
     tokio::task::spawn_blocking(move || {
         let rt = rquickjs::Runtime::new().ok()?;
         let ctx = rquickjs::Context::full(&rt).ok()?;
         ctx.with(|ctx| {
             let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
-
-            let n_json = serde_json::to_string(&encrypted).ok()?;
-
-            if is_qwo {
-                // QWO-style: eval the full player JS so that QWO and all its deps are
-                // in scope. Tolerate any exception — browser-API stubs cover the common
-                // ones; the rest are analytics/UI init that we don't need.
-                if let Some(ref pjs) = player_js {
-                    if let Err(_) = ctx.eval::<rquickjs::Value, _>(pjs.as_str()) {
-                        let exc = format_js_exception(&ctx);
-                        tracing::debug!(exc, "player JS threw (tolerated); continuing");
-                    }
-                }
-                // Define the small __nfunc wrapper that calls QWO.
-                if let Err(e) = ctx.eval::<rquickjs::Value, _>(nfunc.as_str()) {
-                    let exc = format_js_exception(&ctx);
-                    tracing::warn!(error = %e, exc, "failed to eval __nfunc wrapper");
-                    return None;
-                }
-                let call = format!("__nfunc({n_json})");
-                let result = ctx.eval::<rquickjs::Value, _>(call.as_str())
-                    .ok()?
-                    .as_string()
-                    .and_then(|s| s.to_string().ok())
-                    .filter(|s| !s.is_empty());
-                if result.is_none() {
-                    tracing::warn!("__nfunc returned null or empty");
-                }
-                result
-            } else {
-                // IIFE-style: self-contained function, no extra context needed.
-                let code = format!("({nfunc})({n_json})");
-                ctx.eval::<rquickjs::Value, _>(code.as_str())
-                    .ok()?
-                    .as_string()
-                    .and_then(|s| s.to_string().ok())
+            // The IIFE argument is `_yt_player`; g.* assignments inside become _yt_player.*
+            // and persist even if the IIFE throws partway through.
+            if let Err(_) = ctx.eval::<rquickjs::Value, _>(player_js.as_str()) {
+                let exc = format_js_exception(&ctx);
+                tracing::debug!(exc, "player JS threw (tolerated)");
             }
+            let n_json = serde_json::to_string(&encrypted).ok()?;
+            let expr = format!(
+                r#"(function(n){{try{{
+    var ctor=_yt_player["{nclass}"];
+    if(typeof ctor!=="function")return null;
+    var u=new ctor("https://x.googlevideo.com/videoplayback?n="+n,true);
+    var t=u&&typeof u.get==="function"?u.get("n"):null;
+    return(t&&t!==n)?t:null;
+}}catch(e){{return null;}}}})({})"#,
+                n_json
+            );
+            let result = ctx
+                .eval::<rquickjs::Value, _>(expr.as_str())
+                .ok()?
+                .as_string()
+                .and_then(|s| s.to_string().ok());
+            if result.is_none() {
+                tracing::warn!(nclass, "nClass decryption returned null");
+            }
+            result
         })
     })
     .await
@@ -689,18 +866,67 @@ async fn decrypt_nsig(encrypted: &str) -> Option<String> {
 
 /// Decrypt a YouTube `signatureCipher` value (base64 or raw encrypted sig).
 pub async fn decrypt_sig(encrypted: &str) -> Option<String> {
-    let sig_js = player_info().await.sig_js.as_deref()?;
+    let info = player_info().await;
+
+    // Classic path: self-contained snippet defines __sig(a).
+    if let Some(sig_js) = info.sig_js.as_deref() {
+        let encrypted = encrypted.to_owned();
+        let sig_js = sig_js.to_owned();
+        return tokio::task::spawn_blocking(move || {
+            let rt = rquickjs::Runtime::new().ok()?;
+            let ctx = rquickjs::Context::full(&rt).ok()?;
+            ctx.with(|ctx| {
+                let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
+                let s_json = serde_json::to_string(&encrypted).ok()?;
+                let code = format!("{sig_js}\n__sig({s_json})");
+                ctx.eval::<String, _>(code.as_str()).ok()
+            })
+        })
+        .await
+        .ok()
+        .flatten();
+    }
+
+    // Modern path: inject g.__sig before IIFE close, eval full player JS, call _yt_player.__sig.
+    let (Some(injection), Some(player_js)) =
+        (info.sig_injection.as_deref(), info.player_js.as_deref())
+    else {
+        tracing::warn!("no sig_js or sig_injection available for decrypt_sig");
+        return None;
+    };
     let encrypted = encrypted.to_owned();
-    let sig_js = sig_js.to_owned();
+    let injection = injection.to_owned();
+    let player_js = player_js.to_owned();
 
     tokio::task::spawn_blocking(move || {
+        // Patch player JS: insert injection before `})(_yt_player)`.
+        let iife_close = player_js.rfind("})(_yt_player)")?;
+        let patched = format!(
+            "{}{}\n{}",
+            &player_js[..iife_close],
+            injection,
+            &player_js[iife_close..]
+        );
+
         let rt = rquickjs::Runtime::new().ok()?;
         let ctx = rquickjs::Context::full(&rt).ok()?;
         ctx.with(|ctx| {
             let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
+            if let Err(_) = ctx.eval::<rquickjs::Value, _>(patched.as_str()) {
+                let exc = format_js_exception(&ctx);
+                tracing::debug!(exc, "player JS threw during sig eval (tolerated)");
+            }
             let s_json = serde_json::to_string(&encrypted).ok()?;
-            let code = format!("{sig_js}\n__sig({s_json})");
-            ctx.eval::<String, _>(code.as_str()).ok()
+            let expr = format!("_yt_player.__sig({s_json})");
+            let result = ctx
+                .eval::<rquickjs::Value, _>(expr.as_str())
+                .ok()?
+                .as_string()
+                .and_then(|s| s.to_string().ok());
+            if result.is_none() {
+                tracing::warn!("sig injection call returned null/undefined");
+            }
+            result
         })
     })
     .await
@@ -714,6 +940,17 @@ pub async fn decrypt_url(url: &str) -> String {
         return url.to_owned();
     };
 
+    // ANDROID/VR/VISIONOS clients use direct streams — no n-transform needed.
+    // Only WEB-family clients embed an encrypted `n` param.
+    let needs_transform = parsed
+        .query_pairs()
+        .find(|(k, _)| k == "c")
+        .map(|(_, v)| matches!(v.as_ref(), "WEB" | "WEB_REMIX" | "TVHTML5" | "TVHTML5_SIMPLY"))
+        .unwrap_or(false);
+    if !needs_transform {
+        return url.to_owned();
+    }
+
     let Some(encrypted) = parsed
         .query_pairs()
         .find(|(k, _)| k == "n")
@@ -726,6 +963,7 @@ pub async fn decrypt_url(url: &str) -> String {
         tracing::warn!("nsig decryption failed, using original URL");
         return url.to_owned();
     };
+    tracing::debug!(original_n = encrypted, decrypted_n = decrypted, "nsig replacement");
 
     let pairs: Vec<(String, String)> = parsed
         .query_pairs()
