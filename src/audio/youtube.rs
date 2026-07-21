@@ -46,12 +46,15 @@ pub async fn fetch_audio_bytes(
         }
     };
 
+    let sig_ts = super::nsig::signature_timestamp().await;
+
     let stream = yt
         .audio_stream(
             video_id,
             &ContentHints::default(),
             po_player.as_deref(),
             po_streaming.as_deref(),
+            Some(sig_ts),
         )
         .await?;
 

@@ -525,6 +525,7 @@ impl YouTube {
     /// - `hints` — content type hints that select the optimal client chain.
     /// - `po_token` — player-request PoToken (sent in the `/player` body for WEB clients).
     /// - `streaming_pot` — streaming PoToken to append as `pot=` to the CDN URL after resolution.
+    /// - `sig_ts` — `signatureTimestamp` from the player JS, required by WEB/TVHTML5 clients.
     ///
     /// Clients that `require_po_token` are skipped when `po_token` is `None`.
     /// Clients that `login_required` are skipped when not authenticated.
@@ -539,6 +540,7 @@ impl YouTube {
         hints: &ContentHints,
         po_token: Option<&str>,
         streaming_pot: Option<&str>,
+        sig_ts: Option<u32>,
     ) -> Result<AudioStream> {
         let clients = clients_for_hints(hints);
         let logged_in = self.inner.is_logged_in();
@@ -558,8 +560,9 @@ impl YouTube {
             }
 
             let client_pot = if client.use_web_po_tokens { po_token } else { None };
+            let client_sig_ts = if client.use_signature_timestamp { sig_ts } else { None };
 
-            match self.inner.player(client, video_id, None, None, client_pot).await {
+            match self.inner.player(client, video_id, None, client_sig_ts, client_pot).await {
                 Ok(resp) => {
                     let status = &resp.playability_status.status;
                     if status != "OK" {
@@ -620,7 +623,7 @@ impl YouTube {
     ///
     /// Returns [`Error::AllClientsFailed`], [`Error::NotPlayable`], or [`Error::NoAudioFormat`].
     pub async fn audio_url(&self, video_id: &str) -> Result<String> {
-        let stream = self.audio_stream(video_id, &ContentHints::default(), None, None).await?;
+        let stream = self.audio_stream(video_id, &ContentHints::default(), None, None, None).await?;
         if stream.is_cipher {
             Err(Error::NoAudioFormat { video_id: video_id.to_owned() })
         } else {
