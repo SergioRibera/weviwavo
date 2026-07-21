@@ -64,6 +64,8 @@ impl Component for PlayerBar {
 
         let mut is_muted = use_state(|| false);
 
+        let display_vol_pct = (if *is_muted.read() { 0.0 } else { volume }) * 100.0;
+
         let seekbar_width = Platform::get().root_size.read().width;
 
         let progress_pct = if total_secs > 0. {
@@ -84,13 +86,13 @@ impl Component for PlayerBar {
 
         rect()
             .vertical()
-            .width(Size::percent(100.))
+            .width(Size::window_percent(100.))
             .background(Color::from_hex("#0F0F0F").unwrap())
             // seek bar
             .child({
                 let audio_cmd = audio_cmd.clone();
                 rect()
-                    .width(Size::percent(100.))
+                    .width(Size::window_percent(100.))
                     .height(Size::px(3.))
                     .background(Color::from_hex("#2D2D2D").unwrap())
                     .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
@@ -118,10 +120,11 @@ impl Component for PlayerBar {
             .child(
                 rect()
                     .horizontal()
-                    .width(Size::percent(100.))
+                    .width(Size::window_percent(100.))
                     .height(Size::px(64.))
                     .padding(Gaps::new_symmetric(0., 16.))
                     .cross_align(Alignment::Center)
+                    .main_align(Alignment::SpaceBetween)
                     // left: transport controls + time
                     .child(
                         rect()
@@ -293,6 +296,39 @@ impl Component for PlayerBar {
                                             .fill(Color::WHITE)
                                             .width(Size::px(18.))
                                             .height(Size::px(18.)),
+                                    )
+                            })
+                            .child({
+                                const SLIDER_W: f32 = 80.0;
+                                let audio_cmd = audio_cmd.clone();
+                                rect()
+                                    .width(Size::px(SLIDER_W))
+                                    .height(Size::px(4.))
+                                    .background(Color::from_hex("#3D3D3D").unwrap())
+                                    .corner_radius(2.)
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .on_press(move |e: Event<PressEventData>| {
+                                        let x = match e.data() {
+                                            PressEventData::Mouse(m) => m.element_location.x as f32,
+                                            PressEventData::Touch(t) => t.element_location.x as f32,
+                                            PressEventData::Keyboard(_) => return,
+                                        };
+                                        let new_vol = (x / SLIDER_W).clamp(0., 1.);
+                                        let Some(tx) = audio_cmd.clone() else { return };
+                                        tx.try_send(AudioCommand::SetVolume(new_vol)).ok();
+                                        if new_vol > 0.0 {
+                                            is_muted.set(false);
+                                        } else {
+                                            is_muted.set(true);
+                                        }
+                                    })
+                                    .child(
+                                        rect()
+                                            .width(Size::percent(display_vol_pct))
+                                            .height(Size::Fill)
+                                            .corner_radius(2.)
+                                            .background(Color::WHITE),
                                     )
                             })
                             .child(icon_btn(repeat(), 18.))
