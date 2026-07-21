@@ -7,6 +7,76 @@ use crate::error::{Error, Result};
 use crate::filters::{LibraryFilter, SearchFilter};
 use crate::http::{AddDedupOption, InnerTube, LikeAction};
 pub use crate::http::PlaylistPrivacy;
+
+// ─────────────────────────────────────────────
+// Content-aware stream client selection
+// (mirrors Metrolist's ContentAwareFallbackStrategy)
+// ─────────────────────────────────────────────
+
+/// Hints about the content being played used to select the optimal client chain.
+#[derive(Debug, Default, Clone)]
+pub struct ContentHints {
+    /// True for user-uploaded tracks (playlistId contains "MLPT").
+    pub is_uploaded: bool,
+    /// True for age-restricted / explicit content.
+    pub is_explicit: bool,
+    /// True for YouTube Kids content.
+    pub is_kids_content: bool,
+    /// True for live streams.
+    pub is_live: bool,
+}
+
+/// Resolved audio stream from [`YouTube::audio_stream`].
+pub struct AudioStream {
+    /// Direct CDN URL or raw `signatureCipher` query string.
+    pub data: String,
+    /// When `true`, `data` is a `signatureCipher` that requires sig decryption.
+    pub is_cipher: bool,
+    /// Streaming PoToken to append as `pot=` to the final CDN URL (WEB clients only).
+    /// The caller must append this AFTER sig decryption and nsig transform.
+    pub streaming_pot: Option<String>,
+}
+
+fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
+    if hints.is_uploaded {
+        // Uploaded tracks: WEB clients with auth; WEB_CREATOR requires login.
+        vec![
+            YouTubeClient::TVHTML5,
+            YouTubeClient::WEB_REMIX,
+            YouTubeClient::WEB_CREATOR,
+        ]
+    } else if hints.is_live {
+        vec![
+            YouTubeClient::TVHTML5,
+            YouTubeClient::WEB_REMIX,
+            YouTubeClient::WEB_CREATOR,
+            YouTubeClient::TVHTML5_SIMPLY,
+        ]
+    } else if hints.is_kids_content {
+        vec![
+            YouTubeClient::TVHTML5,
+            YouTubeClient::WEB_REMIX,
+            YouTubeClient::TVHTML5_SIMPLY,
+            YouTubeClient::WEB_CREATOR,
+        ]
+    } else if hints.is_explicit {
+        vec![
+            YouTubeClient::VISIONOS,
+            YouTubeClient::TVHTML5,
+            YouTubeClient::WEB_REMIX,
+        ]
+    } else {
+        // Default: direct-URL clients first (no sig/nsig/PoToken), then WEB fallbacks.
+        vec![
+            YouTubeClient::VISIONOS,
+            YouTubeClient::ANDROID_VR_1_65,
+            YouTubeClient::ANDROID_VR_1_43,
+            YouTubeClient::WEB_REMIX,
+            YouTubeClient::TVHTML5,
+            YouTubeClient::TVHTML5_SIMPLY,
+        ]
+    }
+}
 use crate::pages::{
     album::AlbumPage,
     artist::{ArtistItemsContinuationPage, ArtistItemsPage, ArtistPage},
@@ -450,40 +520,46 @@ impl YouTube {
 
     /// Fetch the best audio-only stream for a video.
     ///
-    /// Returns `(data, is_cipher)`:
-    /// - `is_cipher = false` → `data` is a direct CDN URL.
-    /// - `is_cipher = true`  → `data` is a raw `signatureCipher` query string
-    ///   (`s=ENCRYPTED&sp=sig&url=BASE_URL`); caller must decrypt sig and apply nsig.
+    /// Mirrors Metrolist's `ContentAwareFallbackStrategy` + `YTPlayerUtils.playerResponseForPlayback`.
     ///
-    /// Client fallback order:
-    /// 1. Direct-URL clients (ANDROID/VR/VISIONOS) — no sig/nsig needed.
-    /// 2. Cipher clients (TVHTML5, WEB_REMIX) — require sig decryption + nsig.
+    /// - `hints` — content type hints that select the optimal client chain.
+    /// - `po_token` — player-request PoToken (sent in the `/player` body for WEB clients).
+    /// - `streaming_pot` — streaming PoToken to append as `pot=` to the CDN URL after resolution.
+    ///
+    /// Clients that `require_po_token` are skipped when `po_token` is `None`.
+    /// Clients that `login_required` are skipped when not authenticated.
     ///
     /// # Errors
     ///
     /// Returns [`Error::AllClientsFailed`], [`Error::NotPlayable`], or [`Error::NoAudioFormat`]
     /// when no client yields a playable audio stream.
-    pub async fn audio_stream(&self, video_id: &str) -> Result<(String, bool)> {
-        const CLIENTS: &[YouTubeClient] = &[
-            YouTubeClient::ANDROID_MUSIC,     // yt-dlp primary for YTM on Linux, no PoToken
-            YouTubeClient::TV_EMBEDDED,       // embedded player, no PoToken
-            YouTubeClient::ANDROID_TESTSUITE, // PoToken bypass (yt-dlp/NewPipe)
-            YouTubeClient::IOS_MUSIC,
-            YouTubeClient::IOS,
-            YouTubeClient::MOBILE,
-            YouTubeClient::ANDROID_VR_1_65,
-            YouTubeClient::ANDROID_VR_1_43,
-            YouTubeClient::VISIONOS,
-            YouTubeClient::TVHTML5,
-            YouTubeClient::WEB_REMIX,
-        ];
+    pub async fn audio_stream(
+        &self,
+        video_id: &str,
+        hints: &ContentHints,
+        po_token: Option<&str>,
+        streaming_pot: Option<&str>,
+    ) -> Result<AudioStream> {
+        let clients = clients_for_hints(hints);
+        let logged_in = self.inner.is_logged_in();
 
         let mut last_err = Error::AllClientsFailed {
             video_id: video_id.to_owned(),
         };
 
-        for client in CLIENTS {
-            match self.inner.player(client, video_id, None, None, None).await {
+        for client in &clients {
+            if client.require_po_token && po_token.is_none() {
+                tracing::debug!(client = client.client_name, "skipping: requires PoToken");
+                continue;
+            }
+            if client.login_required && !logged_in {
+                tracing::debug!(client = client.client_name, "skipping: requires login");
+                continue;
+            }
+
+            let client_pot = if client.use_web_po_tokens { po_token } else { None };
+
+            match self.inner.player(client, video_id, None, None, client_pot).await {
                 Ok(resp) => {
                     let status = &resp.playability_status.status;
                     if status != "OK" {
@@ -499,24 +575,33 @@ impl YouTube {
                         };
                         continue;
                     }
+
                     let sd = resp.streaming_data.as_ref();
                     let audio_only = sd.map(|s| s.adaptive_formats.iter().filter(|f| f.is_audio_only()).count()).unwrap_or(0);
                     let direct = sd.map(|s| s.adaptive_formats.iter().filter(|f| f.is_audio_only() && f.has_direct_url()).count()).unwrap_or(0);
                     let cipher = sd.map(|s| s.adaptive_formats.iter().filter(|f| f.is_audio_only() && f.signature_cipher.is_some()).count()).unwrap_or(0);
                     tracing::debug!(client = client.client_name, audio_only, direct, cipher, "player OK");
 
-                    // Prefer direct URL (no sig/nsig needed).
+                    // Prefer direct URL (no sig/nsig needed — VISIONOS/VR path).
                     if let Some(fmt) = sd.and_then(|s| s.best_audio_format()) {
                         tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, "direct audio format");
-                        return fmt.url.clone().map(|u| (u, false))
-                            .ok_or(Error::NoAudioFormat { video_id: video_id.to_owned() });
+                        let url = fmt.url.clone().ok_or(Error::NoAudioFormat {
+                            video_id: video_id.to_owned(),
+                        })?;
+                        let spot = client.use_web_po_tokens.then(|| streaming_pot).flatten().map(str::to_owned);
+                        return Ok(AudioStream { data: url, is_cipher: false, streaming_pot: spot });
                     }
-                    // Fall back to cipher format (WEB clients).
+
+                    // Cipher URL (WEB clients — sig decryption + nsig needed by caller).
                     if let Some(fmt) = sd.and_then(|s| s.best_cipher_audio_format()) {
                         tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, "cipher audio format");
-                        return fmt.signature_cipher.clone().map(|c| (c, true))
-                            .ok_or(Error::NoAudioFormat { video_id: video_id.to_owned() });
+                        let cipher_str = fmt.signature_cipher.clone().ok_or(Error::NoAudioFormat {
+                            video_id: video_id.to_owned(),
+                        })?;
+                        let spot = client.use_web_po_tokens.then(|| streaming_pot).flatten().map(str::to_owned);
+                        return Ok(AudioStream { data: cipher_str, is_cipher: true, streaming_pot: spot });
                     }
+
                     last_err = Error::NoAudioFormat { video_id: video_id.to_owned() };
                 }
                 Err(e) => {
@@ -529,17 +614,17 @@ impl YouTube {
         Err(last_err)
     }
 
-    /// Convenience wrapper that only returns direct-URL streams.
+    /// Convenience wrapper — resolves a direct CDN URL using default hints and no PoToken.
     ///
     /// # Errors
     ///
     /// Returns [`Error::AllClientsFailed`], [`Error::NotPlayable`], or [`Error::NoAudioFormat`].
     pub async fn audio_url(&self, video_id: &str) -> Result<String> {
-        let (data, is_cipher) = self.audio_stream(video_id).await?;
-        if is_cipher {
+        let stream = self.audio_stream(video_id, &ContentHints::default(), None, None).await?;
+        if stream.is_cipher {
             Err(Error::NoAudioFormat { video_id: video_id.to_owned() })
         } else {
-            Ok(data)
+            Ok(stream.data)
         }
     }
 

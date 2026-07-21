@@ -42,4 +42,4 @@ pub use models::{
     PodcastRef, SongItem, WatchEndpoint, WatchPlaylistEndpoint, YTItem,
 };
 pub use http::PlaylistPrivacy;
-pub use youtube::{SearchResult, YouTube};
+pub use youtube::{AudioStream, ContentHints, SearchResult, YouTube};

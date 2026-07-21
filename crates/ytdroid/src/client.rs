@@ -4,7 +4,7 @@
 /// All clients send requests to `music.youtube.com`; Metrolist hardcodes this
 /// base URL regardless of the client type.
 #[derive(Debug, Clone)]
-#[allow(clippy::struct_excessive_bools)] // Each bool is a distinct feature flag; no enum makes sense here.
+#[allow(clippy::struct_excessive_bools)]
 pub struct YouTubeClient {
     pub client_name: &'static str,
     pub client_version: &'static str,
@@ -15,10 +15,14 @@ pub struct YouTubeClient {
     pub context_extra: ContextExtra,
     /// Whether this client supports cookie + SAPISIDHASH auth.
     pub login_supported: bool,
+    /// Whether this client won't work at all without login (e.g. WEB_CREATOR).
+    pub login_required: bool,
     /// Whether to include `signatureTimestamp` in player requests.
     pub use_signature_timestamp: bool,
     /// Whether to include `PoToken` in player requests (WEB clients).
     pub use_web_po_tokens: bool,
+    /// Whether a PoToken is mandatory — skip this client if none is available.
+    pub require_po_token: bool,
     /// Whether to send `userAgent` inside `context.client`.
     pub include_user_agent_in_context: bool,
     /// Whether this is an embedded player that can bypass age-gating.
@@ -41,6 +45,9 @@ pub struct ContextExtra {
 const UA_WEB: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0";
 
+const UA_TVHTML5: &str =
+    "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)";
+
 impl YouTubeClient {
     /// Primary client for all browse / search / library calls.
     pub const WEB_REMIX: Self = Self {
@@ -59,9 +66,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: true,
-
+        login_required: false,
         use_signature_timestamp: true,
         use_web_po_tokens: true,
+        require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
     };
@@ -83,9 +91,35 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
+        include_user_agent_in_context: false,
+        is_embedded: false,
+    };
+
+    /// YouTube Studio web client — login-required, used for uploaded tracks.
+    pub const WEB_CREATOR: Self = Self {
+        client_name: "WEB_CREATOR",
+        client_version: "1.20260114.05.00",
+        client_id: "62",
+        user_agent: UA_WEB,
+        context_extra: ContextExtra {
+            os_name: None,
+            os_version: None,
+            device_make: None,
+            device_model: None,
+            android_sdk_version: None,
+            build_id: None,
+            cronet_version: None,
+            package_name: None,
+        },
+        login_supported: true,
+        login_required: true,
+        use_signature_timestamp: true,
+        use_web_po_tokens: true,
+        require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
     };
@@ -107,9 +141,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: true,
-
+        login_required: false,
         use_signature_timestamp: true,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
     };
@@ -131,9 +166,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
     };
@@ -155,9 +191,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
     };
@@ -179,9 +216,10 @@ impl YouTubeClient {
             package_name: Some("com.google.android.apps.youtube.vr.oculus"),
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
     };
@@ -203,19 +241,20 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
     };
 
-    /// TVHTML5 — login-capable, needs PoToken for full reliability.
+    /// TVHTML5 — login-capable, needs sig + nsig + PoToken for full reliability.
     pub const TVHTML5: Self = Self {
         client_name: "TVHTML5",
         client_version: "7.20260114.12.00",
         client_id: "7",
-        user_agent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)",
+        user_agent: UA_TVHTML5,
         context_extra: ContextExtra {
             os_name: None,
             os_version: None,
@@ -227,10 +266,36 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: true,
-
+        login_required: false,
         use_signature_timestamp: true,
         use_web_po_tokens: true,
+        require_po_token: false,
         include_user_agent_in_context: true,
+        is_embedded: false,
+    };
+
+    /// TVHTML5_SIMPLY — requires PoToken, skipped when none is available.
+    pub const TVHTML5_SIMPLY: Self = Self {
+        client_name: "TVHTML5_SIMPLY",
+        client_version: "1.0",
+        client_id: "75",
+        user_agent: UA_TVHTML5,
+        context_extra: ContextExtra {
+            os_name: None,
+            os_version: None,
+            device_make: None,
+            device_model: None,
+            android_sdk_version: None,
+            build_id: None,
+            cronet_version: None,
+            package_name: None,
+        },
+        login_supported: false,
+        login_required: false,
+        use_signature_timestamp: true,
+        use_web_po_tokens: true,
+        require_po_token: true,
+        include_user_agent_in_context: false,
         is_embedded: false,
     };
 
@@ -252,9 +317,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: true,
-
+        login_required: false,
         use_signature_timestamp: true,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: true,
     };
@@ -277,9 +343,10 @@ impl YouTubeClient {
             package_name: Some("com.google.android.apps.youtube.music"),
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
     };
@@ -302,9 +369,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
     };
@@ -326,9 +394,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
     };
@@ -350,9 +419,10 @@ impl YouTubeClient {
             package_name: None,
         },
         login_supported: false,
-
+        login_required: false,
         use_signature_timestamp: false,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
     };
@@ -374,9 +444,10 @@ impl YouTubeClient {
             package_name: Some("com.google.android.apps.youtube.creator"),
         },
         login_supported: true,
-
+        login_required: false,
         use_signature_timestamp: true,
         use_web_po_tokens: false,
+        require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
     };

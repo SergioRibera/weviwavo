@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use ytdroid::client::{Locale, YouTubeClient};
-use ytdroid::YouTube;
+use ytdroid::client::Locale;
+use ytdroid::{AudioStream, ContentHints, YouTube};
 
 use crate::audio::AudioQuality;
 
@@ -28,22 +28,35 @@ pub async fn fetch_audio_bytes(
 
     let yt = YouTube::new(cookies.as_deref(), Locale::default())?;
 
-    // ── Try WEB_REMIX with PoToken first (primary, like Metrolist) ───────────
-    let stream_url = try_web_remix(&yt, video_id).await.or_else(|e| {
-        tracing::warn!("WEB_REMIX+PoToken failed ({e}), trying fallback clients");
-        Err(e)
-    });
-
-    let stream_url = match stream_url {
-        Ok(url) => url,
-        Err(_) => {
-            // Fallback: Android/VR/iOS clients (no PoToken needed)
-            let (raw_data, is_cipher) = yt.audio_stream(video_id).await?;
-            build_stream_url(raw_data, is_cipher, None).await?
+    // Generate PoToken for WEB clients — non-fatal on failure.
+    // VISIONOS/VR clients succeed without it; WEB_REMIX uses it if available.
+    let (po_player, po_streaming) = match servo_webview::potoken::generate(
+        yt.visitor_id().unwrap_or(video_id),
+        video_id,
+    )
+    .await
+    {
+        Ok(tok) => {
+            tracing::debug!("PoToken generated");
+            (Some(tok.player), Some(tok.streaming))
+        }
+        Err(e) => {
+            tracing::warn!("PoToken generation failed ({e}), WEB clients will lack token");
+            (None, None)
         }
     };
 
-    tracing::debug!(%stream_url, "fetching stream bytes");
+    let stream = yt
+        .audio_stream(
+            video_id,
+            &ContentHints::default(),
+            po_player.as_deref(),
+            po_streaming.as_deref(),
+        )
+        .await?;
+
+    let url = resolve_stream(stream).await?;
+    tracing::debug!(%url, "fetching stream bytes");
 
     let http = reqwest::Client::builder()
         .gzip(true)
@@ -51,7 +64,7 @@ pub async fn fetch_audio_bytes(
         .map_err(AudioError::Http)?;
 
     let mut req = http
-        .get(&stream_url)
+        .get(&url)
         .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36");
 
     if let Some(cookie_str) = cookies.as_deref() {
@@ -59,7 +72,6 @@ pub async fn fetch_audio_bytes(
     }
 
     let resp = req.send().await.map_err(AudioError::Http)?;
-
     let status = resp.status();
     if !status.is_success() {
         tracing::warn!(%status, "stream fetch bad status");
@@ -72,71 +84,28 @@ pub async fn fetch_audio_bytes(
     Ok(bytes.to_vec())
 }
 
-/// Try WEB_REMIX with PoToken. Returns the final CDN URL (with pot= appended).
-async fn try_web_remix(yt: &YouTube, video_id: &str) -> Result<String, AudioError> {
-    let session_id = yt.visitor_id().unwrap_or(video_id);
-
-    let tokens =
-        servo_webview::potoken::generate(session_id, video_id)
-            .await
-            .map_err(|e| AudioError::Yt(ytdroid::error::Error::AllClientsFailed {
-                video_id: format!("PoToken: {e}"),
-            }))?;
-
-    let resp = yt
-        .player_raw(&YouTubeClient::WEB_REMIX, video_id, None, Some(&tokens.player))
-        .await?;
-
-    if resp.playability_status.status != "OK" {
-        return Err(AudioError::Yt(ytdroid::error::Error::NotPlayable {
-            status: resp.playability_status.status,
-            reason: resp.playability_status.reason.unwrap_or_default(),
-        }));
-    }
-
-    let sd = resp.streaming_data.as_ref();
-
-    if let Some(fmt) = sd.and_then(|s| s.best_audio_format()) {
-        let url = fmt.url.clone().ok_or(AudioError::CipherDecryptFailed)?;
-        let pot_url = append_pot(&url, &tokens.streaming);
-        return Ok(pot_url);
-    }
-
-    if let Some(fmt) = sd.and_then(|s| s.best_cipher_audio_format()) {
-        let cipher = fmt.signature_cipher.clone().ok_or(AudioError::CipherDecryptFailed)?;
-        let url = build_stream_url(cipher, true, Some(&tokens.streaming)).await?;
-        return Ok(url);
-    }
-
-    Err(AudioError::Yt(ytdroid::error::Error::NoAudioFormat {
-        video_id: video_id.to_owned(),
-    }))
-}
-
-fn append_pot(url: &str, pot: &str) -> String {
-    if url.contains('?') {
-        format!("{url}&pot={pot}")
-    } else {
-        format!("{url}?pot={pot}")
-    }
-}
-
-/// Resolve raw stream data to a final CDN URL, applying sig decryption + nsig + optional pot=.
-async fn build_stream_url(
-    raw_data: String,
-    is_cipher: bool,
-    pot: Option<&str>,
-) -> Result<String, AudioError> {
-    let url = if is_cipher {
-        let fake = format!("x:?{raw_data}");
+/// Resolve an [`AudioStream`] to a final CDN URL.
+///
+/// - Direct URL: apply nsig transform, then append `pot=` if present.
+/// - Cipher URL: decrypt sig → apply nsig → append `pot=` if present.
+async fn resolve_stream(stream: AudioStream) -> Result<String, AudioError> {
+    let url = if stream.is_cipher {
+        let fake = format!("x:?{}", stream.data);
         let parsed = reqwest::Url::parse(&fake).ok();
         let params: HashMap<String, String> = parsed
             .as_ref()
-            .map(|u| u.query_pairs().map(|(k, v)| (k.into_owned(), v.into_owned())).collect())
+            .map(|u| {
+                u.query_pairs()
+                    .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         let enc_sig = params.get("s").cloned().unwrap_or_default();
-        let sig_param = params.get("sp").cloned().unwrap_or_else(|| "sig".to_string());
+        let sig_param = params
+            .get("sp")
+            .cloned()
+            .unwrap_or_else(|| "sig".to_string());
         let base_url = params.get("url").cloned().unwrap_or_default();
 
         tracing::debug!(sig_param, base_url_len = base_url.len(), "decrypting cipher sig");
@@ -153,8 +122,19 @@ async fn build_stream_url(
 
         super::nsig::decrypt_url(&url_with_sig).await
     } else {
-        super::nsig::decrypt_url(&raw_data).await
+        super::nsig::decrypt_url(&stream.data).await
     };
 
-    Ok(pot.map_or_else(|| url.clone(), |p| append_pot(&url, p)))
+    Ok(match stream.streaming_pot {
+        Some(pot) => append_pot(&url, &pot),
+        None => url,
+    })
+}
+
+fn append_pot(url: &str, pot: &str) -> String {
+    if url.contains('?') {
+        format!("{url}&pot={pot}")
+    } else {
+        format!("{url}?pot={pot}")
+    }
 }
