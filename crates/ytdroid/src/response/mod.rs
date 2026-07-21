@@ -487,26 +487,25 @@ pub struct StreamingData {
 impl StreamingData {
     /// Best audio-only format with a direct URL.
     ///
-    /// Prefers `audio/mp4` (AAC) over `audio/webm` (Opus) because symphonia's MKV/WebM
-    /// demuxer probe is unreliable in the rodio integration; isomp4 is solid.
-    /// Within each container preference, highest bitrate wins.
+    /// Priority: `audio/mp4` (AAC/isomp4) → `audio/mpeg` (MP3) → `audio/ogg` (Vorbis) → any.
+    /// WebM/Opus is deprioritised because symphonia's MKV demuxer probe is unreliable.
+    /// Within each tier, highest bitrate wins.
     #[must_use]
     pub fn best_audio_format(&self) -> Option<&StreamingFormat> {
-        let mp4 = self.adaptive_formats
-            .iter()
-            .filter(|f| {
-                f.is_audio_only()
-                    && f.has_direct_url()
-                    && f.mime_type.as_deref().map_or(false, |m| m.starts_with("audio/mp4"))
-            })
-            .max_by_key(|f| f.bitrate.unwrap_or(0));
-        if mp4.is_some() {
-            return mp4;
+        let direct_audio = || {
+            self.adaptive_formats
+                .iter()
+                .filter(|f| f.is_audio_only() && f.has_direct_url())
+        };
+        for prefix in &["audio/mp4", "audio/mpeg", "audio/ogg"] {
+            let best = direct_audio()
+                .filter(|f| f.mime_type.as_deref().map_or(false, |m| m.starts_with(prefix)))
+                .max_by_key(|f| f.bitrate.unwrap_or(0));
+            if best.is_some() {
+                return best;
+            }
         }
-        self.adaptive_formats
-            .iter()
-            .filter(|f| f.is_audio_only() && f.has_direct_url())
-            .max_by_key(|f| f.bitrate.unwrap_or(0))
+        direct_audio().max_by_key(|f| f.bitrate.unwrap_or(0))
     }
 
     /// Best audio-only format that uses `signatureCipher` (WEB clients), by descending bitrate.
