@@ -127,7 +127,14 @@ async fn handle_command(
     fetch_tx: &mpsc::Sender<Result<Vec<u8>, String>>,
 ) {
     match cmd {
-        AudioCommand::Play { video_id, quality, title, artist, album, thumbnail_url } => {
+        AudioCommand::Play {
+            video_id,
+            quality,
+            title,
+            artist,
+            album,
+            thumbnail_url,
+        } => {
             let cookies = radio.read().cookie_header.clone();
 
             {
@@ -151,17 +158,11 @@ async fn handle_command(
         }
         AudioCommand::Pause => {
             rodio_tx.send(RodioCmd::Pause).ok();
-            radio
-                .write_channel(DataChannel::Player)
-                .player
-                .is_playing = false;
+            radio.write_channel(DataChannel::Player).player.is_playing = false;
         }
         AudioCommand::Resume => {
             rodio_tx.send(RodioCmd::Resume).ok();
-            radio
-                .write_channel(DataChannel::Player)
-                .player
-                .is_playing = true;
+            radio.write_channel(DataChannel::Player).player.is_playing = true;
         }
         AudioCommand::Stop => {
             rodio_tx.send(RodioCmd::Stop).ok();
@@ -182,7 +183,10 @@ async fn handle_command(
 
 fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<ProgressState>>) {
     let sink_handle: rodio::MixerDeviceSink = match rodio::DeviceSinkBuilder::open_default_sink() {
-        Ok(h) => h,
+        Ok(mut h) => {
+            h.log_on_drop(false);
+            h
+        }
         Err(e) => {
             error!(error = %e, "failed to open audio output stream");
             return;
@@ -206,15 +210,15 @@ fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<Pro
                             p.current_secs = 0.;
                         }
                         let progress_clone = Arc::clone(&progress);
-                        let source = source.track_position().periodic_access(
-                            PROGRESS_INTERVAL,
-                            move |s| {
-                                let pos = s.get_pos().as_secs_f32();
-                                if let Ok(mut p) = progress_clone.lock() {
-                                    p.current_secs = pos;
-                                }
-                            },
-                        );
+                        let source =
+                            source
+                                .track_position()
+                                .periodic_access(PROGRESS_INTERVAL, move |s| {
+                                    let pos = s.get_pos().as_secs_f32();
+                                    if let Ok(mut p) = progress_clone.lock() {
+                                        p.current_secs = pos;
+                                    }
+                                });
                         player.append(source);
                         player.play();
                         info!("playback started, total={total:.1}s");

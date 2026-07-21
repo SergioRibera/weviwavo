@@ -493,6 +493,15 @@ impl StreamingData {
             .filter(|f| f.is_audio_only() && f.has_direct_url())
             .max_by_key(|f| f.bitrate.unwrap_or(0))
     }
+
+    /// Best audio-only format that uses `signatureCipher` (WEB clients), by descending bitrate.
+    #[must_use]
+    pub fn best_cipher_audio_format(&self) -> Option<&StreamingFormat> {
+        self.adaptive_formats
+            .iter()
+            .filter(|f| f.is_audio_only() && f.signature_cipher.is_some())
+            .max_by_key(|f| f.bitrate.unwrap_or(0))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

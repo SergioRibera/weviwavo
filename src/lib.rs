@@ -8,6 +8,8 @@ mod app;
 mod audio;
 mod auth;
 mod components;
+
+pub use audio::nsig::{decrypt_sig, decrypt_url, signature_timestamp};
 mod cookies;
 mod dialog;
 mod startup;

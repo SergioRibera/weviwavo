@@ -1,5 +1,5 @@
 mod engine;
-mod nsig;
+pub(crate) mod nsig;
 mod youtube;
 
 pub use engine::{AudioCommand, AudioEngine, run_audio_engine};

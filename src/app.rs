@@ -46,13 +46,18 @@ impl App for MainApp {
                     ),
             )
             .child(
-                rect().horizontal().children(
-                    radio
-                        .feed
-                        .chips
-                        .iter()
-                        .map(|c| label().text(c.title.clone()).into_element()),
-                ),
+                rect()
+                    .horizontal()
+                    .spacing(10.)
+                    .color(Color::WHITE)
+                    .children(radio.feed.chips.iter().map(|c| {
+                        rect()
+                            .padding((10., 15.))
+                            .corner_radius(8.)
+                            .background(Color::GRAY)
+                            .child(label().text(c.title.clone()))
+                            .into_element()
+                    })),
             )
             .child(
                 rect().expanded().child(
