@@ -11,6 +11,8 @@ pub struct NextPage {
     pub items: Vec<NextItem>,
     pub playlist_id: Option<String>,
     pub continuation: Option<String>,
+    /// Browse ID for the "Related" tab (tab index 2 in the next response).
+    pub related_browse_id: Option<String>,
     /// Radio/mood chips shown above the up-next queue.
     pub chips: Vec<NextChip>,
 }
@@ -95,10 +97,22 @@ impl NextPage {
             })
             .collect();
 
+        // Tab 2 of the next response holds the "Related" browse endpoint.
+        let related_browse_id = response
+            .contents
+            .as_ref()
+            .and_then(|c| c.tabbed_renderer.as_ref())
+            .and_then(|t| t.watch_next_tabbed_results_renderer.as_ref())
+            .and_then(|r| r.tabs.get(2))
+            .and_then(|t| t.tab_renderer.endpoint.as_ref())
+            .and_then(|e| e.browse_endpoint.as_ref())
+            .and_then(|b| b.browse_id.clone());
+
         Ok(Self {
             items,
             playlist_id,
             continuation,
+            related_browse_id,
             chips,
         })
     }

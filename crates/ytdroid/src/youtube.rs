@@ -85,6 +85,7 @@ use crate::pages::{
     library::{LibraryContinuationPage, LibraryPage},
     next::{NextContinuationPage, NextPage},
     playlist::{PlaylistContinuationPage, PlaylistPage},
+    related::RelatedPage,
     search::{SearchContinuationPage, SearchPage, SearchSummaryPage},
 };
 use crate::response::{
@@ -681,6 +682,19 @@ impl YouTube {
             )
             .await?;
         Ok(NextPage::from_continuation(&raw))
+    }
+
+    /// Fetch the "Related" browse page for a given browse ID (from `NextPage::related_browse_id`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates HTTP and parsing errors.
+    pub async fn related(&self, browse_id: &str) -> Result<RelatedPage> {
+        let raw = self
+            .inner
+            .browse(&YouTubeClient::WEB_REMIX, browse_id, None, None)
+            .await?;
+        Ok(RelatedPage::from_browse_response(&raw))
     }
 
     /// Resolve video IDs or a playlist ID into queue items.

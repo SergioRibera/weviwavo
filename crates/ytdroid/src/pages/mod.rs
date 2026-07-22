@@ -7,6 +7,7 @@ pub mod home;
 pub mod library;
 pub mod next;
 pub mod playlist;
+pub mod related;
 pub mod search;
 
 use crate::models::{

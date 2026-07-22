@@ -721,6 +721,7 @@ pub struct FlexColumnRenderer {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct FlexColumn {
+    #[serde(default)]
     pub music_responsive_list_item_flex_column_renderer: FlexColumnRenderer,
 }
 

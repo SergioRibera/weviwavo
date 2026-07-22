@@ -4,10 +4,11 @@ use freya::animation::*;
 use freya::icons::lucide::{audio_lines, play};
 use freya::prelude::*;
 use freya::radio::use_radio;
+use freya::router::RouterContext;
 use ytdroid::models::YTItem;
 
 use super::TextInfo;
-use crate::app::{Data, DataChannel};
+use crate::app::{Data, DataChannel, NavCommand, Route};
 use crate::audio::{AudioCommand, AudioQuality};
 
 #[derive(Clone, PartialEq)]
@@ -21,6 +22,7 @@ pub struct SongInfo {
     is_album: bool,
     is_artist: bool,
     is_video: bool,
+    is_playlist: bool,
     thumbnail: String,
 }
 
@@ -67,14 +69,19 @@ impl<'a> From<&'a YTItem> for SongInfo {
                     is_album: true,
                     is_artist: false,
                     is_video: false,
+                    is_playlist: false,
                     thumbnail: v.thumbnail.clone().unwrap_or_default(),
                 }
             }
             YTItem::Playlist(v) => {
-                let left = v.author.as_ref()
+                let left = v
+                    .author
+                    .as_ref()
                     .map(|a| TextInfo::plain(a.clone(), None))
                     .unwrap_or_else(TextInfo::none);
-                let details = v.song_count_text.as_ref()
+                let details = v
+                    .song_count_text
+                    .as_ref()
                     .map(|c| TextInfo::plain(c.clone(), None));
                 Self {
                     id: v.id.clone(),
@@ -86,6 +93,7 @@ impl<'a> From<&'a YTItem> for SongInfo {
                     is_album: false,
                     is_artist: false,
                     is_video: false,
+                    is_playlist: true,
                     thumbnail: v.thumbnail.clone().unwrap_or_default(),
                 }
             }
@@ -101,6 +109,7 @@ impl<'a> From<&'a YTItem> for SongInfo {
                 is_album: false,
                 is_artist: true,
                 is_video: false,
+                is_playlist: false,
                 thumbnail: v.thumbnail.clone().unwrap_or_default(),
             },
             YTItem::Song(v) => {
@@ -126,6 +135,7 @@ impl<'a> From<&'a YTItem> for SongInfo {
                     is_album: false,
                     is_artist: false,
                     is_video: v.is_video_song(),
+                    is_playlist: false,
                     thumbnail: v.thumbnail.clone().unwrap_or_default(),
                 }
             }
@@ -134,13 +144,16 @@ impl<'a> From<&'a YTItem> for SongInfo {
                 title: v.title.clone(),
                 artist: v.author.clone().unwrap_or_default(),
                 album: String::new(),
-                left: v.author.as_ref()
+                left: v
+                    .author
+                    .as_ref()
                     .map(|a| TextInfo::plain(a.clone(), None))
                     .unwrap_or_else(TextInfo::none),
                 details: None,
                 is_album: true,
                 is_artist: false,
                 is_video: false,
+                is_playlist: false,
                 thumbnail: v.thumbnail.clone().unwrap_or_default(),
             },
             YTItem::Episode(v) => Self {
@@ -148,13 +161,16 @@ impl<'a> From<&'a YTItem> for SongInfo {
                 title: v.title.clone(),
                 artist: v.podcast.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
                 album: String::new(),
-                left: v.podcast.as_ref()
+                left: v
+                    .podcast
+                    .as_ref()
                     .map(|p| TextInfo::plain(p.name.clone(), None))
                     .unwrap_or_else(TextInfo::none),
                 details: v.date.as_ref().map(|d| TextInfo::plain(d.clone(), None)),
                 is_album: false,
                 is_artist: false,
                 is_video: false,
+                is_playlist: false,
                 thumbnail: v.thumbnail.clone().unwrap_or_default(),
             },
         }
@@ -167,6 +183,8 @@ impl Component for SongInfo {
         let mut hover = use_state(|| false);
         let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let audio_cmd = audio_radio.read().audio_cmd.clone();
+        let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
+        let nav_cmd = nav_radio.read().nav_cmd.clone();
 
         let video_id = self.id.clone();
         let song_title = self.title.clone();
@@ -227,14 +245,30 @@ impl Component for SongInfo {
                                     .on_press({
                                         let is_album = self.is_album;
                                         let is_artist = self.is_artist;
+                                        let is_playlist = self.is_playlist;
                                         let audio_cmd = audio_cmd.clone();
+                                        let nav_cmd = nav_cmd.clone();
                                         let video_id = video_id.clone();
                                         let title = song_title.clone();
                                         let artist = song_artist.clone();
                                         let album = song_album.clone();
                                         let thumbnail_url = song_thumbnail.clone();
                                         move |_| {
-                                            if !is_album && !is_artist {
+                                            if is_playlist {
+                                                // Begin navigation: show loading bar and fetch
+                                                // data before pushing the route (AppLayout
+                                                // handles the push once data arrives).
+                                                if let Some(tx) = nav_cmd.clone() {
+                                                    tx.try_send(NavCommand::BeginNavigation {
+                                                        playlist_id: video_id.clone(),
+                                                    })
+                                                    .ok();
+                                                    tx.try_send(NavCommand::LoadPlaylist(
+                                                        video_id.clone(),
+                                                    ))
+                                                    .ok();
+                                                }
+                                            } else if !is_album && !is_artist {
                                                 is_playing.toggle();
                                                 if let Some(tx) = audio_cmd.clone() {
                                                     tx.try_send(AudioCommand::Play {
@@ -244,7 +278,8 @@ impl Component for SongInfo {
                                                         artist: artist.clone(),
                                                         album: album.clone(),
                                                         thumbnail_url: thumbnail_url.clone(),
-                                                    }).ok();
+                                                    })
+                                                    .ok();
                                                 }
                                             }
                                         }
@@ -257,28 +292,31 @@ impl Component for SongInfo {
                                         },
                                     ))
                                     .maybe_child(
-                                        (!self.is_album && !self.is_artist).then_some(
-                                            SvgViewer::new(if *is_playing.read() {
-                                                audio_lines()
-                                            } else {
-                                                play()
-                                            })
-                                            .fill(Color::WHITE)
-                                            .color(Color::WHITE)
-                                            .width(Size::px(play_btn_size))
-                                            .height(Size::px(play_btn_size)),
-                                        ),
+                                        (!self.is_album && !self.is_artist && !self.is_playlist)
+                                            .then_some(
+                                                SvgViewer::new(if *is_playing.read() {
+                                                    audio_lines()
+                                                } else {
+                                                    play()
+                                                })
+                                                .fill(Color::WHITE)
+                                                .color(Color::WHITE)
+                                                .width(Size::px(play_btn_size))
+                                                .height(Size::px(play_btn_size)),
+                                            ),
                                     ),
                             )
                             .maybe_child(
-                                (*hover.read() && self.is_album).then_some(
+                                (*hover.read() && (self.is_album || self.is_playlist)).then_some(
                                     rect()
                                         .width(album_play_size.clone())
                                         .height(album_play_size)
                                         .rounded_full()
                                         .padding(12.)
                                         .on_press({
+                                            let is_playlist = self.is_playlist;
                                             let audio_cmd = audio_cmd.clone();
+                                            let nav_cmd = nav_cmd.clone();
                                             let video_id = video_id.clone();
                                             let title = song_title.clone();
                                             let artist = song_artist.clone();
@@ -286,7 +324,14 @@ impl Component for SongInfo {
                                             let thumbnail_url = song_thumbnail.clone();
                                             move |_| {
                                                 is_playing.toggle();
-                                                if let Some(tx) = audio_cmd.clone() {
+                                                if is_playlist {
+                                                    if let Some(tx) = nav_cmd.clone() {
+                                                        tx.try_send(NavCommand::PlayPlaylist(
+                                                            video_id.clone(),
+                                                        ))
+                                                        .ok();
+                                                    }
+                                                } else if let Some(tx) = audio_cmd.clone() {
                                                     tx.try_send(AudioCommand::Play {
                                                         video_id: video_id.clone(),
                                                         quality: AudioQuality::Medium,
@@ -294,7 +339,8 @@ impl Component for SongInfo {
                                                         artist: artist.clone(),
                                                         album: album.clone(),
                                                         thumbnail_url: thumbnail_url.clone(),
-                                                    }).ok();
+                                                    })
+                                                    .ok();
                                                 }
                                             }
                                         })

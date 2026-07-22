@@ -2,7 +2,7 @@
 
 use crate::error::{Error, Result};
 use crate::models::{PlaylistItem, SongItem, YTItem};
-use crate::response::common::get_continuation;
+use crate::response::common::{get_continuation, Runs};
 use crate::response::BrowseResponse;
 use super::from_responsive;
 
@@ -30,30 +30,32 @@ impl PlaylistPage {
     /// Returns [`crate::error::Error::MissingField`] on structural mismatch.
     pub fn from_browse_response(response: &BrowseResponse) -> Result<Self> {
         // ── Header ──────────────────────────────────────────
-        // Responsive/editable headers live in section list contents; detail header is page-level.
-        let section_header = response
+        // Responsive/editable headers live in section list contents (single or two-col first tab).
+        let section_list = response
             .single_col()
             .and_then(|sc| sc.first_section_list())
-            .and_then(|sl| {
-                sl.contents.iter().find(|c| {
-                    c.music_responsive_header_renderer.is_some()
-                        || c.music_editable_playlist_detail_header_renderer.is_some()
-                })
-            });
+            .or_else(|| response.two_col()?.first_tab_section_list());
+
+        let section_header = section_list.and_then(|sl| {
+            sl.contents.iter().find(|c| {
+                c.music_responsive_header_renderer.is_some()
+                    || c.music_editable_playlist_detail_header_renderer.is_some()
+            })
+        });
 
         let page_header = response.header.as_ref();
 
         let (title, thumbnail, author, song_count_text) = if let Some(rh) =
             section_header.and_then(|c| c.music_responsive_header_renderer.as_ref())
         {
-            let title = rh.title.as_ref().map(super::super::response::common::Runs::text).unwrap_or_default();
+            let title = rh.title.as_ref().map(Runs::text).unwrap_or_default();
             let thumbnail = rh.thumbnail.as_ref().and_then(|t| t.get_url()).map(str::to_owned);
             let author = rh
                 .strapline_text_one
                 .as_ref()
                 .and_then(|r| r.runs.first())
                 .map(|r| r.text.clone());
-            let song_count_text = rh.second_subtitle.as_ref().map(super::super::response::common::Runs::text);
+            let song_count_text = rh.second_subtitle.as_ref().map(Runs::text);
             (title, thumbnail, author, song_count_text)
         } else if let Some(eh) = section_header
             .and_then(|c| c.music_editable_playlist_detail_header_renderer.as_ref())
@@ -63,14 +65,14 @@ impl PlaylistPage {
             let (title, thumbnail, author, song_count_text) = if let Some(rh) =
                 &eh.music_responsive_header_renderer
             {
-                let title = rh.title.as_ref().map(super::super::response::common::Runs::text).unwrap_or_default();
+                let title = rh.title.as_ref().map(Runs::text).unwrap_or_default();
                 let thumbnail = rh.thumbnail.as_ref().and_then(|t| t.get_url()).map(str::to_owned);
                 let author = rh
                     .strapline_text_one
                     .as_ref()
                     .and_then(|r| r.runs.first())
                     .map(|r| r.text.clone());
-                let song_count_text = rh.second_subtitle.as_ref().map(super::super::response::common::Runs::text);
+                let song_count_text = rh.second_subtitle.as_ref().map(Runs::text);
                 (title, thumbnail, author, song_count_text)
             } else if let Some(dh) = &eh.music_detail_header_renderer {
                 let title = dh.title.text();
@@ -87,6 +89,17 @@ impl PlaylistPage {
             let thumbnail = dh.thumbnail.as_ref().and_then(|t| t.get_url()).map(str::to_owned);
             let author = dh.subtitle.runs.first().map(|r| r.text.clone());
             (title, thumbnail, author, None)
+        } else if let Some(mh) = page_header.and_then(|h| h.music_header_renderer.as_ref()) {
+            // Auto-generated / radio playlists — header lives in page-level musicHeaderRenderer.
+            let title = mh.title.as_ref().map(Runs::text).unwrap_or_default();
+            let thumbnail = mh.thumbnail.as_ref().and_then(|t| t.get_url()).map(str::to_owned);
+            let author = mh
+                .strapline_text_one
+                .as_ref()
+                .and_then(|r| r.runs.first())
+                .map(|r| r.text.clone());
+            let song_count_text = mh.second_subtitle.as_ref().map(Runs::text);
+            (title, thumbnail, author, song_count_text)
         } else {
             return Err(Error::MissingField { field: "playlist header" });
         };

@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use bytes::Bytes;
 use freya::icons::lucide::{
-    audio_lines, chevron_up, ellipsis_vertical, play, repeat, shuffle, skip_back, skip_forward,
+    chevron_up, ellipsis_vertical, pause, play, repeat, shuffle, skip_back, skip_forward,
     thumbs_down, thumbs_up, volume_2, volume_x,
 };
 use freya::prelude::*;
@@ -26,7 +26,6 @@ fn icon_btn(icon: Bytes, size: f32) -> impl IntoElement {
         .child(
             SvgViewer::new(icon)
                 .color(Color::WHITE)
-                .fill(Color::WHITE)
                 .width(Size::px(size))
                 .height(Size::px(size)),
         )
@@ -141,8 +140,11 @@ impl Component for PlayerBar {
                                     .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
                                     .on_press(move |_| {
                                         let Some(tx) = audio_cmd.clone() else { return };
-                                        let seek_to = (current_secs - 10.).max(0.);
-                                        tx.try_send(AudioCommand::Seek(seek_to)).ok();
+                                        if current_secs > 3.0 {
+                                            tx.try_send(AudioCommand::Seek(0.0)).ok();
+                                        } else {
+                                            tx.try_send(AudioCommand::Previous).ok();
+                                        }
                                     })
                                     .child(
                                         SvgViewer::new(skip_back())
@@ -157,8 +159,6 @@ impl Component for PlayerBar {
                                     .center()
                                     .width(Size::px(36.))
                                     .height(Size::px(36.))
-                                    .rounded_full()
-                                    .border(Some(Border::new().width(1.5).fill(Color::WHITE)))
                                     .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
                                     .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
                                     .on_press({
@@ -174,15 +174,11 @@ impl Component for PlayerBar {
                                         }
                                     })
                                     .child(
-                                        SvgViewer::new(if is_playing {
-                                            audio_lines()
-                                        } else {
-                                            play()
-                                        })
-                                        .color(Color::WHITE)
-                                        .fill(Color::WHITE)
-                                        .width(Size::px(18.))
-                                        .height(Size::px(18.)),
+                                        SvgViewer::new(if is_playing { pause() } else { play() })
+                                            .color(Color::WHITE)
+                                            .fill(Color::WHITE)
+                                            .width(Size::px(18.))
+                                            .height(Size::px(18.)),
                                     ),
                             )
                             .child({
@@ -195,8 +191,7 @@ impl Component for PlayerBar {
                                     .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
                                     .on_press(move |_| {
                                         let Some(tx) = audio_cmd.clone() else { return };
-                                        let seek_to = (current_secs + 30.).min(total_secs);
-                                        tx.try_send(AudioCommand::Seek(seek_to)).ok();
+                                        tx.try_send(AudioCommand::Next).ok();
                                     })
                                     .child(
                                         SvgViewer::new(skip_forward())
@@ -232,11 +227,9 @@ impl Component for PlayerBar {
                                     .overflow(Overflow::Clip)
                                     .corner_radius(4.)
                                     .child(
-                                        ImageViewer::new(
-                                            Url::from_str(&thumbnail_url).unwrap(),
-                                        )
-                                        .expanded()
-                                        .image_cover(ImageCover::Center),
+                                        ImageViewer::new(Url::from_str(&thumbnail_url).unwrap())
+                                            .expanded()
+                                            .image_cover(ImageCover::Center),
                                     )
                                     .into_element()
                             }))

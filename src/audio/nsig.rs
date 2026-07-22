@@ -66,7 +66,7 @@ struct PlayerInfo {
     player_js: Option<Box<str>>,
     /// Classic self-contained sig snippet (old players).
     sig_js: Option<Box<str>>,
-    /// Modern players: `g.__sig=function(__s){...};` injected before IIFE close.
+    /// Modern players: `g.__sig=function(__s){...};` injected at the IIFE start.
     sig_injection: Option<Box<str>>,
     sig_timestamp: u32,
 }
@@ -541,6 +541,22 @@ fn extract_sig_injection(player_js: &str) -> Option<Box<str>> {
         return Some(inj.into_boxed_str());
     }
 
+    // Pattern D: 2026+ players — VAR=F1(C1,C2,F2(C3,C4,SRC.s))…,F3(C5,C6,VAR)
+    // Matches xB7-style inline sig transform: a=RO(4,8693,ze(17,3137,E.s));…Lg(67,3417,a)
+    let pat_d = Regex::new(
+        r"[A-Za-z0-9$_]+=([A-Za-z0-9$_]{1,4})\((\d+),(\d+),([A-Za-z0-9$_]{1,4})\((\d+),(\d+),[A-Za-z0-9$_]+\.s\)\).{0,80}[^A-Za-z0-9$_]([A-Za-z0-9$_]{1,4})\((\d+),(\d+),[A-Za-z0-9$_]+\)"
+    ).ok()?;
+    if let Some(caps) = pat_d.captures(player_js) {
+        let (f1, c1, c2) = (&caps[1], &caps[2], &caps[3]);
+        let (f2, c3, c4) = (&caps[4], &caps[5], &caps[6]);
+        let (f3, c5, c6) = (&caps[7], &caps[8], &caps[9]);
+        tracing::debug!(f1, c1, c2, f2, c3, c4, f3, c5, c6, "sig injection (D: xB7-style) found");
+        let inj = format!(
+            "g.__sig=function(__s){{try{{return {f3}({c5},{c6},{f1}({c1},{c2},{f2}({c3},{c4},__s)));}}catch(e){{return null;}}}};"
+        );
+        return Some(inj.into_boxed_str());
+    }
+
     tracing::warn!("sig injection patterns all failed");
     None
 }
@@ -693,7 +709,8 @@ async fn player_info() -> &'static PlayerInfo {
                             })
                             .or_else(|| {
                                 extract_sig_injection(&js).or_else(|| {
-                                    tracing::warn!("sig injection extraction failed");
+                                    tracing::warn!("sig injection extraction failed — dumping player JS to /tmp/yt-player-sig-debug.js");
+                                    let _ = std::fs::write("/tmp/yt-player-sig-debug.js", &js);
                                     None
                                 })
                             })
@@ -985,13 +1002,18 @@ pub async fn decrypt_sig(encrypted: &str) -> Option<String> {
     let player_js = player_js.to_owned();
 
     tokio::task::spawn_blocking(move || {
-        // Patch player JS: insert injection before `})(_yt_player)`.
-        let iife_close = player_js.rfind("})(_yt_player)")?;
+        // Inject g.__sig at the START of the IIFE body so it is always registered
+        // even if the player JS throws later. The closure resolves RO/ze/Lg at
+        // call time (not definition time), so they are available as long as their
+        // own assignment statements ran before any throw.
+        const IIFE_OPEN: &str = "(function(g){";
+        let iife_start = player_js.find(IIFE_OPEN)?;
+        let inject_at = iife_start + IIFE_OPEN.len();
         let patched = format!(
             "{}{}\n{}",
-            &player_js[..iife_close],
+            &player_js[..inject_at],
             injection,
-            &player_js[iife_close..]
+            &player_js[inject_at..]
         );
 
         let rt = rquickjs::Runtime::new().ok()?;

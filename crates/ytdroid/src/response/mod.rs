@@ -245,6 +245,8 @@ pub struct TabbedSearchResultsRenderer {
 pub struct BrowseResponseContents {
     pub single_column_browse_results_renderer: Option<SingleColumnBrowseResultsRenderer>,
     pub two_column_browse_results_renderer: Option<TwoColumnBrowseResultsRenderer>,
+    /// Direct section list, returned by some browse endpoints (e.g. "Related" tab).
+    pub section_list_renderer: Option<SectionListRenderer>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -554,6 +556,7 @@ pub struct NextTab {
 #[serde(rename_all = "camelCase")]
 pub struct NextTabRenderer {
     pub content: Option<NextTabContent>,
+    pub endpoint: Option<common::NavigationEndpoint>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
