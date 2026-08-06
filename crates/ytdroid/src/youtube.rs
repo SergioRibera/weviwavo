@@ -70,18 +70,17 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
             YouTubeClient::WEB_REMIX,
         ]
     } else {
-        // Default: YouTube Music native clients first (direct URL, no sig/nsig, full device context).
-        // ANDROID_TESTSUITE is a widely-trusted testing client used by yt-dlp/NewPipe.
-        // WEB fallbacks last.
+        // Default: direct-URL mobile clients first, then auth-capable WEB clients
+        // (cipher but reliable with sig decryption), then VR clients last (bot detection issues).
         vec![
             YouTubeClient::ANDROID_MUSIC,
             YouTubeClient::IOS_MUSIC,
             YouTubeClient::ANDROID_TESTSUITE,
+            YouTubeClient::WEB_REMIX,
+            YouTubeClient::TVHTML5,
             YouTubeClient::VISIONOS,
             YouTubeClient::ANDROID_VR_1_65,
             YouTubeClient::ANDROID_VR_1_43,
-            YouTubeClient::WEB_REMIX,
-            YouTubeClient::TVHTML5,
             YouTubeClient::TVHTML5_SIMPLY,
         ]
     }

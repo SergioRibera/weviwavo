@@ -653,13 +653,14 @@ fn patch_player_js_for_eval(js: String) -> String {
         // Classic pattern: replace in-place.
         js.replacen(
             "(function(g){var window=this;",
-            "(function(g){var window=globalThis;k4=globalThis;",
+            "(function(g){var window=globalThis;var k4=globalThis;",
             1,
         )
     } else {
         // Modern players: pattern changed, inject unconditionally.
+        // Use `var k4` so the declaration is valid in strict-mode player JS.
         format!(
-            "{}var window=globalThis;k4=globalThis;\n{}",
+            "{}var window=globalThis;var k4=globalThis;\n{}",
             &js[..inject_at],
             after_open,
         )
