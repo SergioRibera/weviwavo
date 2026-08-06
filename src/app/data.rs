@@ -50,6 +50,7 @@ pub struct PlayerState {
     pub volume: f32,
     pub queue: Vec<QueueSong>,
     pub queue_index: usize,
+    pub current_video_id: String,
 }
 
 impl Default for PlayerState {
@@ -66,6 +67,7 @@ impl Default for PlayerState {
             volume: 1.0,
             queue: Vec::new(),
             queue_index: 0,
+            current_video_id: String::new(),
         }
     }
 }

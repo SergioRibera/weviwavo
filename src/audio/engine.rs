@@ -220,6 +220,7 @@ pub async fn run_audio_engine(
                             p.thumbnail_url = next.thumbnail_url.clone();
                             p.current_secs = 0.;
                             p.is_playing = true;
+                            p.current_video_id = next.video_id.clone();
                         }
 
                         rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
@@ -275,6 +276,7 @@ async fn handle_command(
                 p.thumbnail_url = thumbnail_url;
                 p.current_secs = 0.;
                 p.is_playing = true;
+                p.current_video_id = video_id.clone();
                 // Single-song play clears the queue so auto-advance is a no-op.
                 p.queue.clear();
                 p.queue_index = 0;
@@ -309,6 +311,7 @@ async fn handle_command(
                 p.thumbnail_url = song.thumbnail_url.clone();
                 p.current_secs = 0.;
                 p.is_playing = true;
+                p.current_video_id = song.video_id.clone();
             }
 
             let tx = fetch_tx.clone();
@@ -342,6 +345,7 @@ async fn handle_command(
                     p.thumbnail_url = song.thumbnail_url.clone();
                     p.current_secs = 0.;
                     p.is_playing = true;
+                    p.current_video_id = song.video_id.clone();
                 }
 
                 let tx = fetch_tx.clone();
@@ -377,6 +381,7 @@ async fn handle_command(
                     p.thumbnail_url = song.thumbnail_url.clone();
                     p.current_secs = 0.;
                     p.is_playing = true;
+                    p.current_video_id = song.video_id.clone();
                 }
 
                 let tx = fetch_tx.clone();

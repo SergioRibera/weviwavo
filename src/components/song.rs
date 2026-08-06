@@ -179,10 +179,15 @@ impl<'a> From<&'a YTItem> for SongInfo {
 
 impl Component for SongInfo {
     fn render(&self) -> impl IntoElement {
-        let mut is_playing = use_state(|| false);
         let mut hover = use_state(|| false);
         let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
-        let audio_cmd = audio_radio.read().audio_cmd.clone();
+        let (is_playing, audio_cmd) = {
+            let s = audio_radio.read();
+            (
+                s.player.current_video_id == self.id && s.player.is_playing,
+                s.audio_cmd.clone(),
+            )
+        };
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
         let nav_cmd = nav_radio.read().nav_cmd.clone();
 
@@ -269,7 +274,6 @@ impl Component for SongInfo {
                                                     .ok();
                                                 }
                                             } else if !is_album && !is_artist {
-                                                is_playing.toggle();
                                                 if let Some(tx) = audio_cmd.clone() {
                                                     tx.try_send(AudioCommand::Play {
                                                         video_id: video_id.clone(),
@@ -294,7 +298,7 @@ impl Component for SongInfo {
                                     .maybe_child(
                                         (!self.is_album && !self.is_artist && !self.is_playlist)
                                             .then_some(
-                                                SvgViewer::new(if *is_playing.read() {
+                                                SvgViewer::new(if is_playing {
                                                     audio_lines()
                                                 } else {
                                                     play()
@@ -323,7 +327,6 @@ impl Component for SongInfo {
                                             let album = song_album.clone();
                                             let thumbnail_url = song_thumbnail.clone();
                                             move |_| {
-                                                is_playing.toggle();
                                                 if is_playlist {
                                                     if let Some(tx) = nav_cmd.clone() {
                                                         tx.try_send(NavCommand::PlayPlaylist(
@@ -353,7 +356,7 @@ impl Component for SongInfo {
                                         .position(Position::new_absolute().bottom(8.).right(8.))
                                         .background(album_play_color)
                                         .child(
-                                            SvgViewer::new(if *is_playing.read() {
+                                            SvgViewer::new(if is_playing {
                                                 audio_lines()
                                             } else {
                                                 play()
