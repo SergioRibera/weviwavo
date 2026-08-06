@@ -72,6 +72,9 @@ impl InnerTube {
             "hl": self.locale.hl,
         });
         let obj = ctx.as_object_mut().unwrap();
+        if let Some(vid) = &self.visitor_id {
+            obj.insert("visitorData".into(), json!(vid));
+        }
         if client.include_user_agent_in_context {
             obj.insert("userAgent".into(), json!(client.user_agent));
         }

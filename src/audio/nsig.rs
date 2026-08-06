@@ -1,8 +1,9 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use regex::Regex;
-use tokio::sync::OnceCell;
+use tokio::sync::RwLock;
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -71,7 +72,12 @@ struct PlayerInfo {
     sig_timestamp: u32,
 }
 
-static PLAYER_INFO: OnceCell<PlayerInfo> = OnceCell::const_new();
+static PLAYER_CACHE: OnceLock<RwLock<Option<(Arc<PlayerInfo>, Instant)>>> = OnceLock::new();
+const PLAYER_TTL: Duration = Duration::from_secs(6 * 3600);
+
+fn player_cache() -> &'static RwLock<Option<(Arc<PlayerInfo>, Instant)>> {
+    PLAYER_CACHE.get_or_init(|| RwLock::new(None))
+}
 
 fn shared_client() -> &'static reqwest::Client {
     CLIENT.get_or_init(reqwest::Client::new)
@@ -633,114 +639,149 @@ fn dump_player_diagnostics(js: &str) {
 /// that causes "Context has not been set and window is undefined." to throw and
 /// stop execution before g.yk (~2.14 MB) and g.__sig (near end) are defined.
 fn patch_player_js_for_eval(js: String) -> String {
-    // `var window=this` makes window=_yt_player={} inside the IIFE — window.document etc
-    // are undefined, causing throws mid-IIFE before g.yk / g.__sig are reached.
-    // Replace with globalThis so our BROWSER_STUBS are visible as window.* inside the IIFE.
-    // Also pre-assign k4 (read by qN at ~1.4 MB, normally set at ~1.65 MB).
-    js.replacen(
-        "(function(g){var window=this;",
-        "(function(g){var window=globalThis;k4=globalThis;",
-        1,
-    )
+    // Inject k4=globalThis at the IIFE start. k4 is read at ~1.4 MB but assigned at ~1.65 MB;
+    // the IIFE throws before that assignment runs, leaving k4 undefined.
+    // Also redirect window=this → window=globalThis so BROWSER_STUBS are visible inside the IIFE.
+    const IIFE_OPEN: &str = "(function(g){";
+    let Some(iife_start) = js.find(IIFE_OPEN) else {
+        return js;
+    };
+    let inject_at = iife_start + IIFE_OPEN.len();
+    let after_open = &js[inject_at..];
+
+    if after_open.starts_with("var window=this;") {
+        // Classic pattern: replace in-place.
+        js.replacen(
+            "(function(g){var window=this;",
+            "(function(g){var window=globalThis;k4=globalThis;",
+            1,
+        )
+    } else {
+        // Modern players: pattern changed, inject unconditionally.
+        format!(
+            "{}var window=globalThis;k4=globalThis;\n{}",
+            &js[..inject_at],
+            after_open,
+        )
+    }
 }
 
-async fn player_info() -> &'static PlayerInfo {
-    PLAYER_INFO
-        .get_or_init(|| async {
-            let result = async {
-                let url = player_js_url().await?;
-                let hash = player_hash_from_url(&url);
-                tracing::debug!(url, ?hash, "fetching player JS");
-                let js = shared_client()
-                    .get(&url)
-                    .send()
-                    .await
-                    .ok()?
-                    .text()
-                    .await
-                    .ok()?;
-                Some((js, hash))
+async fn fetch_player_info_inner() -> PlayerInfo {
+    let result = async {
+        let url = player_js_url().await?;
+        let hash = player_hash_from_url(&url);
+        tracing::debug!(url, ?hash, "fetching player JS");
+        let js = shared_client()
+            .get(&url)
+            .send()
+            .await
+            .ok()?
+            .text()
+            .await
+            .ok()?;
+        Some((js, hash))
+    }
+    .await;
+
+    match result {
+        Some((js, player_hash)) => {
+            let configs = player_configs();
+            let config = player_hash.as_deref().and_then(|h| configs.get(h));
+
+            if let Some((sig_expr, nclass_name, sts)) = config {
+                tracing::debug!(
+                    hash = player_hash.as_deref().unwrap_or("?"),
+                    sig_expr,
+                    nclass = nclass_name,
+                    sts,
+                    "player config found — using hardcoded sig/nClass"
+                );
             }
-            .await;
 
-            match result {
-                Some((js, player_hash)) => {
-                    let configs = player_configs();
-                    let config = player_hash.as_deref().and_then(|h| configs.get(h));
+            let nfunc_js = extract_nfunc(&js).or_else(|| {
+                tracing::warn!("nfunc not found in player JS");
+                dump_player_diagnostics(&js);
+                None
+            });
 
-                    if let Some((sig_expr, nclass_name, sts)) = config {
-                        tracing::debug!(
-                            hash = player_hash.as_deref().unwrap_or("?"),
-                            sig_expr,
-                            nclass = nclass_name,
-                            sts,
-                            "player config found — using hardcoded sig/nClass"
-                        );
-                    }
+            // nClass: regex first, then config fallback.
+            let nclass = if nfunc_js.is_none() {
+                extract_nclass_from_qwo(&js).or_else(|| {
+                    config.map(|(_, nc, _)| nc.clone().into_boxed_str())
+                })
+            } else {
+                None
+            };
 
-                    let nfunc_js = extract_nfunc(&js).or_else(|| {
-                        tracing::warn!("nfunc not found in player JS");
-                        dump_player_diagnostics(&js);
-                        None
-                    });
+            let sig_js = extract_sig_func(&js).or_else(|| {
+                tracing::warn!("sig func not found in player JS");
+                None
+            });
 
-                    // nClass: regex first, then config fallback.
-                    let nclass = if nfunc_js.is_none() {
-                        extract_nclass_from_qwo(&js).or_else(|| {
-                            config.map(|(_, nc, _)| nc.clone().into_boxed_str())
+            // sig injection: config first, then regex patterns.
+            let sig_injection = if sig_js.is_none() {
+                config
+                    .filter(|(sig_expr, _, _)| !sig_expr.is_empty())
+                    .map(|(sig_expr, _, _)| {
+                        let inj = sig_injection_from_expr(sig_expr);
+                        tracing::debug!(injection = &*inj, "sig injection from player config");
+                        inj
+                    })
+                    .or_else(|| {
+                        extract_sig_injection(&js).or_else(|| {
+                            tracing::warn!("sig injection extraction failed — dumping player JS to /tmp/yt-player-sig-debug.js");
+                            let _ = std::fs::write("/tmp/yt-player-sig-debug.js", &js);
+                            None
                         })
-                    } else {
-                        None
-                    };
+                    })
+            } else {
+                None
+            };
 
-                    let sig_js = extract_sig_func(&js).or_else(|| {
-                        tracing::warn!("sig func not found in player JS");
-                        None
-                    });
-
-                    // sig injection: config first, then regex patterns.
-                    let sig_injection = if sig_js.is_none() {
-                        config
-                            .filter(|(sig_expr, _, _)| !sig_expr.is_empty())
-                            .map(|(sig_expr, _, _)| {
-                                let inj = sig_injection_from_expr(sig_expr);
-                                tracing::debug!(injection = &*inj, "sig injection from player config");
-                                inj
-                            })
-                            .or_else(|| {
-                                extract_sig_injection(&js).or_else(|| {
-                                    tracing::warn!("sig injection extraction failed — dumping player JS to /tmp/yt-player-sig-debug.js");
-                                    let _ = std::fs::write("/tmp/yt-player-sig-debug.js", &js);
-                                    None
-                                })
-                            })
-                    } else {
-                        None
-                    };
-
-                    // sig_timestamp: JS literal first, then config fallback.
-                    let sig_timestamp = {
-                        let from_js = extract_sig_timestamp(&js);
-                        if from_js == 19950 {
-                            config.map(|(_, _, sts)| *sts).unwrap_or(19950)
-                        } else {
-                            from_js
-                        }
-                    };
-
-                    // Keep full player JS when nClass or sig-injection paths are needed.
-                    let player_js = (nclass.is_some() || sig_injection.is_some())
-                        .then(|| patch_player_js_for_eval(js).into_boxed_str());
-
-                    PlayerInfo { nfunc_js, nclass, player_js, sig_js, sig_injection, sig_timestamp }
+            // sig_timestamp: JS literal first, then config fallback.
+            let sig_timestamp = {
+                let from_js = extract_sig_timestamp(&js);
+                if from_js == 19950 {
+                    config.map(|(_, _, sts)| *sts).unwrap_or(19950)
+                } else {
+                    from_js
                 }
-                None => {
-                    tracing::warn!("failed to fetch player JS");
-                    PlayerInfo { nfunc_js: None, nclass: None, player_js: None, sig_js: None, sig_injection: None, sig_timestamp: 19950 }
-                }
+            };
+
+            // Keep full player JS when nClass or sig-injection paths are needed.
+            let player_js = (nclass.is_some() || sig_injection.is_some())
+                .then(|| patch_player_js_for_eval(js).into_boxed_str());
+
+            PlayerInfo { nfunc_js, nclass, player_js, sig_js, sig_injection, sig_timestamp }
+        }
+        None => {
+            tracing::warn!("failed to fetch player JS");
+            PlayerInfo { nfunc_js: None, nclass: None, player_js: None, sig_js: None, sig_injection: None, sig_timestamp: 19950 }
+        }
+    }
+}
+
+async fn player_info() -> Arc<PlayerInfo> {
+    // Fast path: valid cached entry within TTL.
+    {
+        let guard = player_cache().read().await;
+        if let Some((info, fetched)) = guard.as_ref() {
+            if fetched.elapsed() < PLAYER_TTL {
+                return Arc::clone(info);
             }
-        })
-        .await
+        }
+    }
+    // Slow path: acquire write lock, double-check, then refresh.
+    let mut guard = player_cache().write().await;
+    if let Some((info, fetched)) = guard.as_ref() {
+        if fetched.elapsed() < PLAYER_TTL {
+            return Arc::clone(info);
+        }
+    }
+    tracing::debug!("refreshing player JS (TTL expired or first load)");
+    let info = Arc::new(fetch_player_info_inner().await);
+    *guard = Some((Arc::clone(&info), Instant::now()));
+    info
 }
 
 pub async fn signature_timestamp() -> u32 {

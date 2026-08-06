@@ -142,7 +142,7 @@ impl YouTubeClient {
         },
         login_supported: true,
         login_required: false,
-        use_signature_timestamp: true,
+        use_signature_timestamp: false,
         use_web_po_tokens: false,
         require_po_token: false,
         include_user_agent_in_context: false,

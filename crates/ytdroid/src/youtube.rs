@@ -47,6 +47,8 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
         ]
     } else if hints.is_live {
         vec![
+            YouTubeClient::ANDROID_MUSIC,
+            YouTubeClient::IOS_MUSIC,
             YouTubeClient::TVHTML5,
             YouTubeClient::WEB_REMIX,
             YouTubeClient::WEB_CREATOR,
@@ -61,13 +63,20 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
         ]
     } else if hints.is_explicit {
         vec![
-            YouTubeClient::VISIONOS,
+            YouTubeClient::ANDROID_MUSIC,
+            YouTubeClient::IOS_MUSIC,
+            YouTubeClient::ANDROID_TESTSUITE,
             YouTubeClient::TVHTML5,
             YouTubeClient::WEB_REMIX,
         ]
     } else {
-        // Default: direct-URL clients first (no sig/nsig/PoToken), then WEB fallbacks.
+        // Default: YouTube Music native clients first (direct URL, no sig/nsig, full device context).
+        // ANDROID_TESTSUITE is a widely-trusted testing client used by yt-dlp/NewPipe.
+        // WEB fallbacks last.
         vec![
+            YouTubeClient::ANDROID_MUSIC,
+            YouTubeClient::IOS_MUSIC,
+            YouTubeClient::ANDROID_TESTSUITE,
             YouTubeClient::VISIONOS,
             YouTubeClient::ANDROID_VR_1_65,
             YouTubeClient::ANDROID_VR_1_43,
@@ -481,7 +490,7 @@ impl YouTube {
 
     /// Fetch player / streaming data for a video.
     ///
-    /// Uses the ANDROID client for direct URLs (no cipher / n-transform required).
+    /// Uses ANDROID_MUSIC for direct URLs (no cipher / n-transform required).
     ///
     /// # Errors
     ///
@@ -494,7 +503,7 @@ impl YouTube {
     ) -> Result<PlayerResponse> {
         let raw = self
             .inner
-            .player(&YouTubeClient::MOBILE, video_id, playlist_id, None, None)
+            .player(&YouTubeClient::ANDROID_MUSIC, video_id, playlist_id, None, None)
             .await?;
         Ok(raw)
     }
