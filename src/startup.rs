@@ -30,30 +30,102 @@ pub async fn run_startup(mut radio: RadioStation<Data, DataChannel>) {
 }
 
 async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
-    let Some(cookie_header) = radio.read().cookie_header.clone() else {
-        tracing::warn!("no cookies available — skipping YT client init");
+    let cookie_header = radio.read().cookie_header.clone();
+
+    let yt_base = match &cookie_header {
+        Some(h) => YouTube::new(Some(h), Locale::default()),
+        None => YouTube::new(None, Locale::default()),
+    };
+
+    let Ok(yt_base) = yt_base.inspect_err(|e| tracing::error!(error = %e, "failed to create YT client")) else {
         return;
     };
 
-    let yt = YouTube::new(Some(&cookie_header), Locale::default())
-        .inspect_err(|e| tracing::error!(error = %e, "failed to create YT client"));
+    let http = reqwest::Client::new();
+    let bearer = resolve_bearer(&http, &mut radio).await;
 
-    tracing::debug!(success = yt.is_ok(), "YT client creation finished");
+    let yt = match bearer {
+        Some(ref token) => yt_base.with_bearer_token(token),
+        None => yt_base,
+    };
 
-    if let Ok(yt) = yt {
-        {
-            let mut data = radio.write_channel(DataChannel::YtApi);
-            data.yt_session = Some(yt.clone());
-            data.cookie_header = Some(cookie_header);
+    {
+        let mut data = radio.write_channel(DataChannel::YtApi);
+        data.yt_session = Some(yt.clone());
+        data.bearer_token = bearer;
+        if let Some(h) = cookie_header {
+            data.cookie_header = Some(h);
         }
-        match yt.home(None).await {
-            Ok(feed) => {
-                tracing::debug!(sections = feed.sections.len(), "home feed loaded");
-                radio.write_channel(DataChannel::Feed).feed = feed;
+    }
+
+    match yt.home(None).await {
+        Ok(feed) => {
+            tracing::debug!(sections = feed.sections.len(), "home feed loaded");
+            radio.write_channel(DataChannel::Feed).feed = feed;
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to fetch home feed");
+        }
+    }
+}
+
+/// Returns a live access token, either refreshed from disk or obtained via device flow.
+async fn resolve_bearer(
+    http: &reqwest::Client,
+    radio: &mut RadioStation<Data, DataChannel>,
+) -> Option<String> {
+    if let Some(refresh_token) = crate::oauth::load_refresh_token() {
+        match ytdroid::oauth::refresh_access_token(http, &refresh_token).await {
+            Ok(token) => {
+                tracing::info!("OAuth access token refreshed");
+                return Some(token);
             }
             Err(e) => {
-                tracing::error!(error = %e, "failed to fetch home feed");
+                tracing::warn!(error = %e, "OAuth refresh failed — re-running device flow");
+                crate::oauth::clear_refresh_token();
             }
+        }
+    }
+
+    start_device_flow(http, radio).await
+}
+
+async fn start_device_flow(
+    http: &reqwest::Client,
+    radio: &mut RadioStation<Data, DataChannel>,
+) -> Option<String> {
+    let device = match ytdroid::oauth::request_device_code(http).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::error!(error = %e, "OAuth device code request failed");
+            return None;
+        }
+    };
+
+    tracing::info!(
+        user_code = %device.user_code,
+        url = %device.verification_url,
+        "OAuth device flow — waiting for user authorization"
+    );
+
+    radio.write_channel(DataChannel::Auth).oauth_pending =
+        Some((device.user_code.clone(), device.verification_url.clone()));
+
+    let result = ytdroid::oauth::poll_token(http, &device.device_code, device.interval).await;
+
+    radio.write_channel(DataChannel::Auth).oauth_pending = None;
+
+    match result {
+        Ok(token) => {
+            if !token.refresh_token.is_empty() {
+                crate::oauth::save_refresh_token(&token.refresh_token);
+                tracing::info!("OAuth refresh token saved");
+            }
+            Some(token.access_token)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "OAuth device flow failed");
+            None
         }
     }
 }

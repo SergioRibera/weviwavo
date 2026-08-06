@@ -39,7 +39,6 @@ pub struct AudioStream {
 
 fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
     if hints.is_uploaded {
-        // Uploaded tracks: WEB clients with auth; WEB_CREATOR requires login.
         vec![
             YouTubeClient::TVHTML5,
             YouTubeClient::WEB_REMIX,
@@ -47,8 +46,7 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
         ]
     } else if hints.is_live {
         vec![
-            YouTubeClient::ANDROID_MUSIC,
-            YouTubeClient::IOS_MUSIC,
+            YouTubeClient::ANDROID_BEARER,
             YouTubeClient::TVHTML5,
             YouTubeClient::WEB_REMIX,
             YouTubeClient::WEB_CREATOR,
@@ -63,18 +61,16 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
         ]
     } else if hints.is_explicit {
         vec![
-            YouTubeClient::ANDROID_MUSIC,
-            YouTubeClient::IOS_MUSIC,
+            YouTubeClient::ANDROID_BEARER,
             YouTubeClient::ANDROID_TESTSUITE,
             YouTubeClient::TVHTML5,
             YouTubeClient::WEB_REMIX,
         ]
     } else {
-        // Default: direct-URL mobile clients first, then auth-capable WEB clients
-        // (cipher but reliable with sig decryption), then VR clients last (bot detection issues).
+        // ANDROID_BEARER (id=3 + TV OAuth) first — direct URLs, no cipher, no PoToken.
+        // TV-issued tokens work with clientId=3 (confirmed by yt-dlp) but NOT clientId=21.
         vec![
-            YouTubeClient::ANDROID_MUSIC,
-            YouTubeClient::IOS_MUSIC,
+            YouTubeClient::ANDROID_BEARER,
             YouTubeClient::ANDROID_TESTSUITE,
             YouTubeClient::WEB_REMIX,
             YouTubeClient::TVHTML5,
@@ -141,6 +137,22 @@ impl YouTube {
     #[must_use]
     pub fn visitor_id(&self) -> Option<&str> {
         self.inner.visitor_id.as_deref()
+    }
+
+    /// Attach an OAuth2 Bearer token for Android/iOS client requests.
+    ///
+    /// Call this after a successful device-flow or token refresh. The token is
+    /// used only for clients with `use_bearer_auth = true` (ANDROID_MUSIC, IOS_MUSIC).
+    #[must_use]
+    pub fn with_bearer_token(mut self, token: impl Into<String>) -> Self {
+        self.inner.bearer_token = Some(token.into());
+        self
+    }
+
+    /// Returns the OAuth2 Bearer token, if one has been set.
+    #[must_use]
+    pub fn bearer_token(&self) -> Option<&str> {
+        self.inner.bearer_token.as_deref()
     }
 
     /// True when a `SAPISID` / `__Secure-3PAPISID` cookie was provided.
@@ -502,7 +514,7 @@ impl YouTube {
     ) -> Result<PlayerResponse> {
         let raw = self
             .inner
-            .player(&YouTubeClient::ANDROID_MUSIC, video_id, playlist_id, None, None)
+            .player(&YouTubeClient::ANDROID_BEARER, video_id, playlist_id, None, None)
             .await?;
         Ok(raw)
     }

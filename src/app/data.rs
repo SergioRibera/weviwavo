@@ -77,6 +77,8 @@ pub struct Data {
     pub yt_session: Option<YouTube>,
     /// Raw `Cookie:` header preserved for the audio engine's authenticated requests.
     pub cookie_header: Option<String>,
+    /// OAuth2 access token for ANDROID_MUSIC / IOS_MUSIC clients.
+    pub bearer_token: Option<String>,
     pub feed: HomePage,
     pub player: PlayerState,
     pub audio_cmd: Option<mpsc::Sender<AudioCommand>>,
@@ -86,6 +88,9 @@ pub struct Data {
     pub is_loading: bool,
     /// Browse ID of the playlist navigation that's pending data.
     pub pending_playlist_id: Option<String>,
+    /// Active OAuth2 device-flow prompt: (user_code, verification_url).
+    /// None once the user has authorized or the flow failed.
+    pub oauth_pending: Option<(String, String)>,
 }
 
 #[derive(Default, PartialEq, Eq, Clone, Debug, Copy, Hash, PartialOrd, Ord)]
@@ -96,6 +101,8 @@ pub enum DataChannel {
     Player,
     /// Owns `nav_cmd`, `playlist_view`, `is_loading`, `pending_playlist_id`.
     Navigation,
+    /// Owns `oauth_pending`.
+    Auth,
 }
 
 impl RadioChannel<Data> for DataChannel {}

@@ -1,3 +1,4 @@
+mod hooks;
 mod loading_bar;
 mod player_bar;
 mod playlist_song_row;
@@ -8,6 +9,7 @@ mod song_context_menu;
 mod textinfo;
 mod top_bar;
 
+pub use hooks::*;
 pub use loading_bar::*;
 pub use player_bar::*;
 pub use playlist_song_row::*;

@@ -27,6 +27,8 @@ pub struct InnerTube {
     cookies: HashMap<String, String>,
     /// Visitor ID sent as `X-Goog-Visitor-Id` (optional).
     pub visitor_id: Option<String>,
+    /// OAuth2 Bearer token for Android/iOS clients (set via [`YouTube::with_bearer_token`]).
+    pub bearer_token: Option<String>,
 }
 
 impl InnerTube {
@@ -52,13 +54,15 @@ impl InnerTube {
             locale,
             cookies,
             visitor_id: None,
+            bearer_token: None,
         })
     }
 
-    /// True when a `SAPISID` or `__Secure-3PAPISID` cookie is present (login capable).
+    /// True when cookie-based or bearer-token auth is present.
     #[must_use]
     pub fn is_logged_in(&self) -> bool {
-        self.cookies.contains_key("SAPISID")
+        self.bearer_token.is_some()
+            || self.cookies.contains_key("SAPISID")
             || self.cookies.contains_key("__Secure-3PAPISID")
     }
 
@@ -91,14 +95,27 @@ impl InnerTube {
             obj.insert("deviceModel".into(), json!(v));
         }
         if let Some(v) = client.context_extra.android_sdk_version {
-            obj.insert("androidSdkVersion".into(), json!(v));
+            // Must be an integer — "31" (string) causes INVALID_ARGUMENT 400.
+            if let Ok(n) = v.parse::<u32>() {
+                obj.insert("androidSdkVersion".into(), json!(n));
+            }
         }
-        if let Some(v) = client.context_extra.build_id {
-            obj.insert("utcOffsetMinutes".into(), json!(0));
-            obj.insert("timeZone".into(), json!("UTC"));
-            let _ = v;
-        }
-        let mut out = json!({ "client": ctx });
+        // Bearer-auth (Android) clients: minimal context matching yt-dlp's android_music shape.
+        // Web clients: full context with request/user subobjects (Metrolist Context.kt defaults).
+        let mut out = if client.use_bearer_auth {
+            json!({ "client": ctx })
+        } else {
+            json!({
+                "client": ctx,
+                "request": {
+                    "internalExperimentFlags": [],
+                    "useSsl": true
+                },
+                "user": {
+                    "lockedSafetyMode": false
+                }
+            })
+        };
         if client.is_embedded {
             out.as_object_mut().unwrap().insert(
                 "thirdParty".into(),
@@ -122,26 +139,49 @@ impl InnerTube {
         client: &YouTubeClient,
         body: Value,
     ) -> Result<Value> {
-        let url = format!("{MUSIC_API_BASE}{endpoint}?prettyPrint=false");
+        let base = client.api_base.unwrap_or(MUSIC_API_BASE);
+        let url = match client.api_key {
+            Some(key) => format!("{base}{endpoint}?key={key}&prettyPrint=false"),
+            None => format!("{base}{endpoint}?prettyPrint=false"),
+        };
+        if client.use_bearer_auth {
+            debug!(
+                url,
+                body = %serde_json::to_string(&body).unwrap_or_default(),
+                has_bearer = self.bearer_token.is_some(),
+                "bearer request"
+            );
+        }
         let cookie_str = self.cookie_header();
+
+        // Common headers for every client.
         let mut req = self
             .http
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("X-Goog-Api-Format-Version", "1")
+            .header("Accept", "application/json")
             .header("X-YouTube-Client-Name", client.client_id)
             .header("X-YouTube-Client-Version", client.client_version)
-            // X-Origin and Referer are sent for all clients (matches Metrolist's ytClient).
-            // Note: we use X-Origin (not Origin) — Origin is a CORS browser header and causes
-            // INVALID_ARGUMENT 400 on Android client endpoints when sent unconditionally.
-            .header("X-Origin", MUSIC_ORIGIN)
-            .header("Referer", MUSIC_REFERER)
             .header("User-Agent", client.user_agent);
 
-        if client.login_supported && !cookie_str.is_empty() {
-            req = req.header("Cookie", &cookie_str);
-            if let Some(auth) = sapisidhash(&self.cookies) {
-                req = req.header("Authorization", auth);
+        if client.use_bearer_auth {
+            // Android/iOS OAuth2 path.
+            // X-Goog-Api-Format-Version / X-Origin / Referer are web-only headers;
+            // sending them with Bearer causes INVALID_ARGUMENT 400.
+            if let Some(token) = &self.bearer_token {
+                req = req.header("Authorization", format!("Bearer {token}"));
+            }
+        } else {
+            // WEB-family path: browser-origin headers required by music.youtube.com.
+            req = req
+                .header("X-Goog-Api-Format-Version", "1")
+                .header("X-Origin", MUSIC_ORIGIN)
+                .header("Referer", MUSIC_REFERER);
+            if client.login_supported && !cookie_str.is_empty() {
+                req = req.header("Cookie", &cookie_str);
+                if let Some(auth) = sapisidhash(&self.cookies) {
+                    req = req.header("Authorization", auth);
+                }
             }
         }
         if let Some(vid) = &self.visitor_id {

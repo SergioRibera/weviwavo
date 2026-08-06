@@ -24,6 +24,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod oauth;
 pub mod error;
 pub mod filters;
 pub mod http;

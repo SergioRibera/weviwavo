@@ -23,10 +23,15 @@ pub async fn fetch_audio_bytes(
     video_id: &str,
     quality: AudioQuality,
     cookies: Option<String>,
+    bearer_token: Option<String>,
 ) -> Result<Vec<u8>, AudioError> {
-    tracing::debug!(video_id, has_cookies = cookies.is_some(), "fetching audio");
+    tracing::debug!(video_id, has_cookies = cookies.is_some(), has_bearer = bearer_token.is_some(), "fetching audio");
 
-    let yt = YouTube::new(cookies.as_deref(), Locale::default())?;
+    let yt_base = YouTube::new(cookies.as_deref(), Locale::default())?;
+    let yt = match bearer_token {
+        Some(ref token) => yt_base.with_bearer_token(token),
+        None => yt_base,
+    };
 
     // Generate PoToken for WEB clients — non-fatal on failure.
     // VISIONOS/VR clients succeed without it; WEB_REMIX uses it if available.

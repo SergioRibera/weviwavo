@@ -51,12 +51,14 @@ impl Component for AppLayout {
         // ── hooks ────────────────────────────────────────────────────────────
         let player_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
+        let auth_radio = use_radio::<Data, DataChannel>(DataChannel::Auth);
         let router = RouterContext::get();
 
         // Guard against pushing the same route more than once per navigation.
         let mut route_pushed = use_state(|| false);
 
         let has_player = !player_radio.read().player.title.is_empty();
+        let oauth_pending = auth_radio.read().oauth_pending.clone();
         let bg_image = ("bg_image", include_bytes!("../resources/bg_default.webp"));
         let platform = Platform::get().root_size;
 
@@ -105,5 +107,41 @@ impl Component for AppLayout {
                     .child(Outlet::<Route>::new()),
             )
             .maybe_child(has_player.then(PlayerBar::default))
+            .maybe_child(oauth_pending.map(|(code, url)| OAuthPrompt { code, url }))
+    }
+}
+
+#[derive(PartialEq)]
+struct OAuthPrompt {
+    code: String,
+    url: String,
+}
+
+impl Component for OAuthPrompt {
+    fn render(&self) -> impl IntoElement {
+        Popup::new()
+            .child(
+                rect()
+                    .vertical()
+                    .spacing(12.)
+                    .padding(20.)
+                    .cross_align(Alignment::Center)
+                    .child(label().font_size(20.).text("Connect your Google account"))
+                    .child(
+                        label()
+                            .font_size(14.)
+                            .text(format!("Visit:  {}", self.url)),
+                    )
+                    .child(
+                        label()
+                            .font_size(28.)
+                            .text(self.code.clone()),
+                    )
+                    .child(
+                        label()
+                            .font_size(12.)
+                            .text("Enter the code above, then wait — the app will continue automatically."),
+                    ),
+            )
     }
 }

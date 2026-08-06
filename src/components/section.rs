@@ -1,9 +1,9 @@
 use std::ops::Deref;
 
-use freya::{animation::*, prelude::*};
+use freya::prelude::*;
 use ytdroid::pages::home::HomeSection;
 
-use super::{SongInfo, scroll_button, ScrollDir};
+use super::{SongInfo, scroll_button, use_responsive_width, ScrollDir};
 
 #[derive(PartialEq)]
 pub struct Section {
@@ -36,11 +36,6 @@ impl LayoutExt for Section {
 
 impl ContainerExt for Section {}
 
-#[derive(PartialEq, Clone, Copy)]
-enum WindowSize {
-    Small, // <= 1024
-    Large, // > 1024
-}
 
 impl Component for Section {
     fn render_key(&self) -> DiffKey {
@@ -48,44 +43,9 @@ impl Component for Section {
     }
 
     fn render(&self) -> impl IntoElement {
-        let platform = Platform::get();
-
-        let mut max_width_anim = use_animation(|_| {
-            AnimNum::new(70., 100.)
-                .function(Function::Sine)
-                .ease(Ease::InOut)
-                .time(100)
-        });
-
-        let mut prev_window_size = use_state(|| {
-            let width = platform.root_size.read().width;
-            if width <= 1024. {
-                WindowSize::Small
-            } else {
-                WindowSize::Large
-            }
-        });
+        let max_width = use_responsive_width();
 
         let mut scroll_controller = use_scroll_controller(ScrollConfig::default);
-
-        let current_width = platform.root_size.read().width;
-        let current_window_size = if current_width <= 1024. {
-            WindowSize::Small
-        } else {
-            WindowSize::Large
-        };
-
-        if current_window_size != *prev_window_size.read() {
-            match current_window_size {
-                WindowSize::Small => {
-                    max_width_anim.start();
-                }
-                WindowSize::Large => {
-                    max_width_anim.reverse();
-                }
-            }
-            prev_window_size.set(current_window_size);
-        }
 
         let scroll_amount = 270; // 250 (item size) + 20 (spacing)
         let content_len = self.items.len();
@@ -106,8 +66,6 @@ impl Component for Section {
             max_overflow,
             "section render"
         );
-
-        let max_width = max_width_anim.read().value();
 
         rect()
             .vertical()

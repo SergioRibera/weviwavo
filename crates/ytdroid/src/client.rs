@@ -27,6 +27,12 @@ pub struct YouTubeClient {
     pub include_user_agent_in_context: bool,
     /// Whether this is an embedded player that can bypass age-gating.
     pub is_embedded: bool,
+    /// Whether to authenticate with OAuth2 Bearer token instead of SAPISIDHASH.
+    pub use_bearer_auth: bool,
+    /// Override for the Innertube API base URL. None = use MUSIC_API_BASE (music.youtube.com).
+    pub api_base: Option<&'static str>,
+    /// API key appended as `?key=`. None = no key param.
+    pub api_key: Option<&'static str>,
 }
 
 /// Extra fields merged into `context.client` for clients that need them.
@@ -72,6 +78,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// Generic web client.
@@ -97,6 +106,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// YouTube Studio web client — login-required, used for uploaded tracks.
@@ -122,6 +134,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// Android YouTube client — login-capable (SAPISIDHASH + cookies), matching Metrolist's MOBILE.
@@ -147,6 +162,39 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
+    };
+
+    /// ANDROID (id=3) with OAuth2 Bearer — TV credentials work with client_id=3 (yt-dlp confirms).
+    /// Gives direct stream URLs without cipher. Used instead of ANDROID_MUSIC for Bearer auth
+    /// because YouTube Music rejects TV-issued tokens for client_id=21.
+    pub const ANDROID_BEARER: Self = Self {
+        client_name: "ANDROID",
+        client_version: "21.03.38",
+        client_id: "3",
+        user_agent: "com.google.android.youtube/21.03.38 (Linux; U; Android 14) gzip",
+        context_extra: ContextExtra {
+            os_name: Some("Android"),
+            os_version: Some("14"),
+            android_sdk_version: Some("34"),
+            build_id: None,
+            cronet_version: None,
+            device_make: None,
+            device_model: None,
+            package_name: None,
+        },
+        login_supported: false,
+        login_required: false,
+        use_signature_timestamp: false,
+        use_web_po_tokens: false,
+        require_po_token: false,
+        include_user_agent_in_context: true,
+        is_embedded: false,
+        use_bearer_auth: true,
+        api_base: Some(YT_API_BASE),
+        api_key: Some(YT_API_KEY),
     };
 
     /// Android VR — no SAPISIDHASH, cookie-only auth.
@@ -172,6 +220,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// Android VR 1.65.10 — cookie-only auth, non-adaptive bitrate available.
@@ -197,6 +248,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// Android VR 1.43.32 — cookie-only auth, non-adaptive bitrate (fixes audio stuttering on YTM).
@@ -222,6 +276,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// VisionOS — cookie-only auth. May stop working at any time.
@@ -247,6 +304,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// TVHTML5 — login-capable, needs sig + nsig + PoToken for full reliability.
@@ -272,6 +332,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// TVHTML5_SIMPLY — requires PoToken, skipped when none is available.
@@ -297,6 +360,9 @@ impl YouTubeClient {
         require_po_token: true,
         include_user_agent_in_context: false,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// Embedded player client — Metrolist explicitly marks "PoToken not required".
@@ -323,10 +389,13 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: true,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
-    /// Android YouTube Music client — used by yt-dlp on Linux for YTM without PoToken.
-    /// clientId=21, cookie-only auth, returns direct stream URLs.
+    /// Android YouTube Music client (no auth) — unauthenticated fallback only.
+    /// TV-issued Bearer tokens are rejected for clientId=21 with INVALID_ARGUMENT 400.
     pub const ANDROID_MUSIC: Self = Self {
         client_name: "ANDROID_MUSIC",
         client_version: "7.27.0",
@@ -349,6 +418,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// Android test suite client — widely used (yt-dlp, NewPipe) to bypass PoToken requirements.
@@ -375,6 +447,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// iOS YouTube app — cookie-only auth, direct stream URLs, no PoToken required.
@@ -400,6 +475,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// iOS YouTube Music app — cookie-only auth, direct stream URLs, no PoToken required.
@@ -425,6 +503,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: true,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 
     /// Android Creator — login-capable, plays most content including kids/uploaded.
@@ -450,6 +531,9 @@ impl YouTubeClient {
         require_po_token: false,
         include_user_agent_in_context: false,
         is_embedded: false,
+        use_bearer_auth: false,
+        api_base: None,
+        api_key: None,
     };
 }
 
@@ -474,3 +558,6 @@ impl Default for Locale {
 pub(crate) const MUSIC_ORIGIN: &str = "https://music.youtube.com";
 pub(crate) const MUSIC_REFERER: &str = "https://music.youtube.com/";
 pub(crate) const MUSIC_API_BASE: &str = "https://music.youtube.com/youtubei/v1/";
+pub(crate) const MUSIC_API_KEY: &str = "AIzaSyAOghZGza2MQSZkY_zfZ370N-PUdXEo8AI";
+pub(crate) const YT_API_BASE: &str = "https://www.youtube.com/youtubei/v1/";
+pub(crate) const YT_API_KEY: &str = "AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w";
