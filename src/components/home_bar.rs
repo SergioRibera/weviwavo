@@ -42,6 +42,22 @@ impl Component for HomeBar {
                     .width(1.)
                     .fill(Color::from_hex("#292929").unwrap()),
             )
+            .maybe_child(on_menu.map(|cb| {
+                rect()
+                    .center()
+                    .width(Size::px(36.))
+                    .height(Size::px(36.))
+                    .rounded_full()
+                    .on_press(move |_| (cb.borrow_mut())())
+                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                    .child(
+                        SvgViewer::new(menu())
+                            .color(Color::WHITE)
+                            .width(Size::px(20.))
+                            .height(Size::px(20.)),
+                    )
+            }))
             .maybe_child(
                 show_back.then_some(
                     rect()
@@ -55,29 +71,11 @@ impl Component for HomeBar {
                         .child(
                             SvgViewer::new(chevron_left())
                                 .color(Color::WHITE)
-                                .fill(Color::WHITE)
                                 .width(Size::px(20.))
                                 .height(Size::px(20.)),
                         ),
                 ),
             )
-            .maybe_child(on_menu.map(|cb| {
-                rect()
-                    .center()
-                    .width(Size::px(36.))
-                    .height(Size::px(36.))
-                    .rounded_full()
-                    .on_press(move |_| (cb.borrow_mut())())
-                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                    .child(
-                        SvgViewer::new(menu())
-                            .color(Color::WHITE)
-                            .fill(Color::WHITE)
-                            .width(Size::px(20.))
-                            .height(Size::px(20.)),
-                    )
-            }))
             .child(SearchBar)
     }
 }

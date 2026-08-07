@@ -1,4 +1,7 @@
-use std::str::FromStr;
+use std::{
+    str::FromStr,
+    time::Duration,
+};
 
 use freya::icons::lucide::{bookmark, house, plus};
 use freya::prelude::*;
@@ -7,6 +10,7 @@ use freya::radio::use_radio;
 use crate::app::{Data, DataChannel, NavCommand};
 
 const SELECTED_BG: &str = "#282828";
+const SIDEBAR_COLLAPSED_W: f32 = 72.;
 
 pub struct Sidebar {
     pub width: f32,
@@ -18,14 +22,14 @@ impl PartialEq for Sidebar {
     }
 }
 
-fn nav_btn(icon: bytes::Bytes, text: &'static str, active: bool) -> impl IntoElement {
+fn nav_btn(icon: bytes::Bytes, text: &'static str, active: bool, collapsed: bool) -> Element {
     let bg = if active {
         Color::from_hex(SELECTED_BG).unwrap()
     } else {
         Color::TRANSPARENT
     };
 
-    rect()
+    let btn = rect()
         .horizontal()
         .width(Size::Fill)
         .height(Size::px(44.))
@@ -64,7 +68,17 @@ fn nav_btn(icon: bytes::Bytes, text: &'static str, active: bool) -> impl IntoEle
                         .max_lines(1)
                         .text_overflow(TextOverflow::Ellipsis),
                 ),
-        )
+        );
+
+    if collapsed {
+        TooltipContainer::new(Tooltip::new(text))
+            .position(AttachedPosition::Right)
+            .delay(Duration::from_millis(300))
+            .child(btn)
+            .into_element()
+    } else {
+        btn.into_element()
+    }
 }
 
 impl Component for Sidebar {
@@ -78,6 +92,7 @@ impl Component for Sidebar {
         drop(yt_state);
 
         let nav_cmd = nav_radio.read().nav_cmd.clone();
+        let collapsed = self.width <= SIDEBAR_COLLAPSED_W;
 
         rect()
             .vertical()
@@ -93,8 +108,8 @@ impl Component for Sidebar {
                     .fill(Color::from_hex("#292929").unwrap()),
             )
             // ── nav buttons ───────────────────────────────────────────────
-            .child(nav_btn(house(), "Inicio", true))
-            .child(nav_btn(bookmark(), "Mi biblioteca", false))
+            .child(nav_btn(house(), "Inicio", true, collapsed))
+            .child(nav_btn(bookmark(), "Mi biblioteca", false, collapsed))
             // ── separator ─────────────────────────────────────────────────
             .child(
                 rect()
@@ -112,8 +127,8 @@ impl Component for Sidebar {
                     .height(Size::flex(1.0))
                     .spacing(2.)
                     // "Nueva lista" button
-                    .child(
-                        rect()
+                    .child({
+                        let nueva_btn = rect()
                             .horizontal()
                             .width(Size::Fill)
                             .height(Size::px(40.))
@@ -152,8 +167,17 @@ impl Component for Sidebar {
                                             .max_lines(1)
                                             .text_overflow(TextOverflow::Ellipsis),
                                     ),
-                            ),
-                    )
+                            );
+                        if collapsed {
+                            TooltipContainer::new(Tooltip::new("Nueva lista"))
+                                .position(AttachedPosition::Right)
+                                .delay(Duration::from_millis(300))
+                                .child(nueva_btn)
+                                .into_element()
+                        } else {
+                            nueva_btn.into_element()
+                        }
+                    })
                     .child(
                         ScrollView::new()
                             .direction(Direction::Vertical)
@@ -163,12 +187,11 @@ impl Component for Sidebar {
                             .children(playlists_inner.into_iter().map(|p| {
                                 let id = p.id.clone();
                                 let name = p.title.clone();
+                                let tooltip_name = name.clone();
                                 let sub = p.author.clone().unwrap_or_default();
                                 let thumb =
                                     p.thumbnail.as_deref().and_then(|u| Url::from_str(u).ok());
                                 let nav = nav_cmd_inner.clone();
-                                let press_id = id.clone();
-                                let press_nav = nav.clone();
 
                                 let thumb_rect = rect()
                                     .width(Size::px(44.))
@@ -181,7 +204,7 @@ impl Component for Sidebar {
                                             .image_cover(ImageCover::Center)
                                     }));
 
-                                rect()
+                                let row = rect()
                                     .horizontal()
                                     .cross_align(Alignment::Center)
                                     .width(Size::Fill)
@@ -223,8 +246,17 @@ impl Component for Sidebar {
                                                     .color(Color::from_hex("#888888").unwrap())
                                                     .text(sub),
                                             ),
-                                    )
-                                    .into_element()
+                                    );
+
+                                if collapsed {
+                                    TooltipContainer::new(Tooltip::new(tooltip_name))
+                                        .position(AttachedPosition::Right)
+                                        .delay(Duration::from_millis(300))
+                                        .child(row)
+                                        .into_element()
+                                } else {
+                                    row.into_element()
+                                }
                             })),
                     )
             }))
