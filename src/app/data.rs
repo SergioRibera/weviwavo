@@ -80,6 +80,7 @@ pub struct Data {
     /// OAuth2 access token for ANDROID_MUSIC / IOS_MUSIC clients.
     pub bearer_token: Option<String>,
     pub feed: HomePage,
+    pub library_playlists: Vec<PlaylistItem>,
     pub player: PlayerState,
     pub audio_cmd: Option<mpsc::Sender<AudioCommand>>,
     pub nav_cmd: Option<mpsc::Sender<NavCommand>>,

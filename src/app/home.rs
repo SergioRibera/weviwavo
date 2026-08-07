@@ -1,8 +1,12 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use freya::animation::*;
 use freya::prelude::*;
 use freya::radio::use_radio;
 
 use crate::app::{Data, DataChannel};
-use crate::components::{Section, use_responsive_width};
+use crate::components::{HomeBar, Section, Sidebar, use_responsive_width};
 
 #[derive(PartialEq)]
 struct ChipsRow {
@@ -43,26 +47,75 @@ pub struct Home;
 impl Component for Home {
     fn render(&self) -> impl IntoElement {
         let feed_radio = use_radio::<Data, DataChannel>(DataChannel::Feed);
-        let radio = feed_radio.read();
 
-        let chips: Vec<String> = radio.feed.chips.iter().map(|c| c.title.clone()).collect();
+        let chips: Vec<String> = feed_radio
+            .read()
+            .feed
+            .chips
+            .iter()
+            .map(|c| c.title.clone())
+            .collect();
 
+        // ── sidebar animation ─────────────────────────────────────────────
+        let mut sidebar_open = use_state(|| false);
+        let mut prev_open = use_state(|| false);
+        let mut sidebar_anim = use_animation(|_| {
+            AnimNum::new(0., 240.)
+                .function(Function::Sine)
+                .ease(Ease::InOut)
+                .time(250)
+        });
+
+        let open = *sidebar_open.read();
+        if open != *prev_open.read() {
+            if open { sidebar_anim.start() } else { sidebar_anim.reverse() }
+            prev_open.set(open);
+        }
+
+        let sidebar_width = sidebar_anim.read().value();
+
+        // ── callbacks ─────────────────────────────────────────────────────
+        let on_open: Rc<RefCell<dyn FnMut()>> =
+            Rc::new(RefCell::new(move || sidebar_open.set(true)));
+        let on_close: Rc<RefCell<dyn FnMut()>> =
+            Rc::new(RefCell::new(move || sidebar_open.set(false)));
+
+        // ── layout ────────────────────────────────────────────────────────
+        // HomeBar is full-width and sits above the sidebar+content split so
+        // the search bar never shifts when the sidebar opens.
         rect()
+            .vertical()
             .expanded()
+            .child(HomeBar {
+                on_menu: (!open).then_some(on_open),
+                show_back_btn: false,
+            })
             .child(
-                ScrollView::new()
-                    .expanded()
-                    .direction(Direction::Vertical)
-                    .spacing(18.)
-                    .child(ChipsRow { chips })
-                    .children(
-                        radio
-                            .feed
-                            .sections
-                            .clone()
-                            .into_iter()
-                            .map(Section::new)
-                            .map(IntoElement::into_element),
+                rect()
+                    .horizontal()
+                    .width(Size::Fill)
+                    .height(Size::flex(1.0))
+                    .child(Sidebar {
+                        width: sidebar_width,
+                        on_close,
+                    })
+                    .child(
+                        ScrollView::new()
+                            .width(Size::flex(1.0))
+                            .height(Size::Fill)
+                            .direction(Direction::Vertical)
+                            .spacing(18.)
+                            .child(ChipsRow { chips })
+                            .children(
+                                feed_radio
+                                    .read()
+                                    .feed
+                                    .sections
+                                    .clone()
+                                    .into_iter()
+                                    .map(Section::new)
+                                    .map(IntoElement::into_element),
+                            ),
                     ),
             )
     }

@@ -3,6 +3,9 @@ use tokio::sync::mpsc;
 use ytdroid::client::Locale;
 use ytdroid::YouTube;
 
+use ytdroid::filters::browse_id;
+use ytdroid::models::YTItem;
+
 use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData};
 use crate::audio::{AudioCommand, AudioEngine, AudioQuality, run_audio_engine};
 
@@ -65,6 +68,23 @@ async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to fetch home feed");
+        }
+    }
+
+    match yt.library(browse_id::LIBRARY_PLAYLISTS, None).await {
+        Ok(page) => {
+            let playlists = page
+                .items
+                .into_iter()
+                .filter_map(|item| match item {
+                    YTItem::Playlist(p) => Some(p),
+                    _ => None,
+                })
+                .collect();
+            radio.write_channel(DataChannel::YtApi).library_playlists = playlists;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "library playlists unavailable");
         }
     }
 }
