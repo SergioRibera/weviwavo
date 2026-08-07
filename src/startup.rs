@@ -61,6 +61,10 @@ async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
         }
     }
 
+    // Pre-warm player JS cache + QuickJS worker in the background so the
+    // first song play doesn't pay the cold-start cost (base.js fetch + parse).
+    tokio::spawn(crate::audio::nsig::warm());
+
     match yt.home(None).await {
         Ok(feed) => {
             tracing::debug!(sections = feed.sections.len(), "home feed loaded");

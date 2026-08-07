@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::mpsc::{self, SyncSender};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, oneshot};
 
 static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -789,6 +790,144 @@ pub async fn signature_timestamp() -> u32 {
     player_info().await.sig_timestamp
 }
 
+/// Pre-fetch player JS and initialize the QuickJS worker thread.
+/// Call once at startup (in a background task) so the first song play
+/// doesn't pay the cold-start cost.
+pub async fn warm() {
+    let info = player_info().await;
+    js_worker(&info); // init worker with pre-loaded context
+}
+
+// ── Persistent QuickJS evaluator thread ──────────────────────────────────────
+//
+// Creating a new rquickjs Runtime + Context per call is expensive when the
+// nClass or sig_injection path is active — it re-evaluates the full 2-3 MB
+// player JS on every song. A dedicated thread holds a single warmed context
+// and processes eval requests via a sync channel.
+
+struct JsTask {
+    code: String,
+    reply: oneshot::Sender<Option<String>>,
+}
+
+struct JsWorker {
+    tx: SyncSender<JsTask>,
+    /// Raw pointer to the PlayerInfo allocation — used to detect staleness.
+    /// When player_info() refreshes (6h TTL), the Arc points to a new object;
+    /// we spawn a fresh thread with the updated JS.
+    info_ptr: usize,
+}
+
+static JS_WORKER: Mutex<Option<JsWorker>> = Mutex::new(None);
+
+/// Returns a sender to the live QuickJS worker for the given player info.
+/// Spawns (or re-spawns after a player refresh) the worker as needed.
+fn js_worker(info: &Arc<PlayerInfo>) -> Option<SyncSender<JsTask>> {
+    let ptr = Arc::as_ptr(info) as usize;
+
+    let mut guard = JS_WORKER.lock().ok()?;
+
+    if let Some(ref w) = *guard {
+        if w.info_ptr == ptr {
+            return Some(w.tx.clone());
+        }
+        // Player refreshed — old worker drains and exits when its Receiver is dropped.
+    }
+
+    let preload = build_preload(info);
+    let (tx, rx) = mpsc::sync_channel::<JsTask>(32);
+
+    std::thread::Builder::new()
+        .name("qjs-eval".into())
+        .spawn(move || {
+            let Ok(rt) = rquickjs::Runtime::new() else {
+                tracing::error!("qjs worker: failed to create Runtime");
+                return;
+            };
+            let Ok(ctx) = rquickjs::Context::full(&rt) else {
+                tracing::error!("qjs worker: failed to create Context");
+                return;
+            };
+
+            ctx.with(|ctx| {
+                let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
+                if !preload.is_empty() {
+                    if let Err(_) = ctx.eval::<rquickjs::Value, _>(preload.as_str()) {
+                        let exc = format_js_exception(&ctx);
+                        tracing::debug!(exc, "qjs worker preload threw (tolerated)");
+                    }
+                }
+                tracing::debug!("qjs worker ready");
+            });
+
+            while let Ok(task) = rx.recv() {
+                let result = ctx.with(|ctx| {
+                    ctx.eval::<rquickjs::Value, _>(task.code.as_str())
+                        .ok()
+                        .and_then(|v| v.as_string().and_then(|s| s.to_string().ok()))
+                });
+                let _ = task.reply.send(result);
+            }
+
+            tracing::debug!("qjs worker exiting");
+        })
+        .ok()?;
+
+    *guard = Some(JsWorker { tx: tx.clone(), info_ptr: ptr });
+    Some(tx)
+}
+
+/// Build the JS to pre-load in the worker context.
+///
+/// After this runs the worker context has:
+/// - `__nfunc(n)` defined (nfunc path)
+/// - `__sig(s)` defined (sig_js path)
+/// - `_yt_player` populated with nClass constructor and/or `__sig` (player_js path)
+fn build_preload(info: &PlayerInfo) -> String {
+    let mut code = String::with_capacity(256);
+
+    // nfunc: ensure it is accessible as `__nfunc`.
+    if let Some(ref nfunc) = info.nfunc_js {
+        if nfunc.contains("__nfunc") {
+            code.push_str(nfunc);
+        } else {
+            // Anonymous function — bind it to a known name.
+            code.push_str("var __nfunc = ");
+            code.push_str(nfunc);
+            code.push(';');
+        }
+        code.push('\n');
+    }
+
+    // sig_js: defines `__sig`.
+    if let Some(ref sig_js) = info.sig_js {
+        code.push_str(sig_js);
+        code.push('\n');
+    }
+
+    // Full player JS needed for nClass and/or sig_injection paths.
+    if info.nclass.is_some() || info.sig_injection.is_some() {
+        if let Some(ref player_js) = info.player_js {
+            // Inject `g.__sig = function(...)` before the IIFE body so it
+            // survives a throw partway through the player JS evaluation.
+            let patched = if let Some(ref inj) = info.sig_injection {
+                const IIFE_OPEN: &str = "(function(g){";
+                if let Some(pos) = player_js.find(IIFE_OPEN) {
+                    let at = pos + IIFE_OPEN.len();
+                    format!("{}{}\n{}", &player_js[..at], inj, &player_js[at..])
+                } else {
+                    player_js.as_ref().to_owned()
+                }
+            } else {
+                player_js.as_ref().to_owned()
+            };
+            code.push_str(&patched);
+        }
+    }
+
+    code
+}
+
 fn format_js_exception(ctx: &rquickjs::Ctx<'_>) -> String {
     let exc = ctx.catch();
     if let Some(s) = exc.as_string().and_then(|s| s.to_string().ok()) {
@@ -932,11 +1071,39 @@ var URLSearchParams = globalThis.URLSearchParams || function(init) {
 /// Decrypt the YouTube CDN `n` throttling parameter using the player JS nfunc.
 async fn decrypt_nsig(encrypted: &str) -> Option<String> {
     let info = player_info().await;
+    let n_json = serde_json::to_string(encrypted).ok()?;
+
+    // Fast path: use the persistent worker (pre-loaded context, no per-call Runtime overhead).
+    if let Some(tx) = js_worker(&info) {
+        let code = if info.nfunc_js.is_some() {
+            // __nfunc is defined in the worker context via build_preload.
+            format!("__nfunc({n_json})")
+        } else if let Some(nclass) = info.nclass.as_deref() {
+            // _yt_player[nclass] constructor is available after player JS eval.
+            format!(
+                r#"(function(n){{try{{
+    var ctor=_yt_player["{nclass}"];
+    if(typeof ctor!=="function")return null;
+    var u=new ctor("https://x.googlevideo.com/videoplayback?n="+n,true);
+    var t=u&&typeof u.get==="function"?u.get("n"):null;
+    return(t&&t!==n)?t:null;
+}}catch(e){{return null;}}}})({})"#,
+                n_json
+            )
+        } else {
+            tracing::warn!("no nfunc or nclass available for nsig decryption");
+            return None;
+        };
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(JsTask { code, reply: reply_tx }).ok()?;
+        return reply_rx.await.ok().flatten();
+    }
+
+    // Fallback: spawn_blocking with fresh Runtime (worker failed to init).
     let encrypted = encrypted.to_owned();
 
     if let Some(nfunc) = info.nfunc_js.as_deref() {
-        // Self-contained snippet from delegation trace or old-style extraction.
-        // Delegation trace produces `function __nfunc(n){...}`; old-style is a raw function.
         let nfunc = nfunc.to_owned();
         return tokio::task::spawn_blocking(move || {
             let rt = rquickjs::Runtime::new().ok()?;
@@ -960,8 +1127,6 @@ async fn decrypt_nsig(encrypted: &str) -> Option<String> {
         .flatten();
     }
 
-    // nClass path (Metrolist-style): eval full player JS (tolerate throw), then call
-    // `new _yt_player[nclass](url, true)` — the class is set on _yt_player before any throw.
     let (Some(nclass), Some(player_js)) =
         (info.nclass.as_deref(), info.player_js.as_deref())
     else {
@@ -976,8 +1141,6 @@ async fn decrypt_nsig(encrypted: &str) -> Option<String> {
         let ctx = rquickjs::Context::full(&rt).ok()?;
         ctx.with(|ctx| {
             let _ = ctx.eval::<rquickjs::Value, _>(BROWSER_STUBS);
-            // The IIFE argument is `_yt_player`; g.* assignments inside become _yt_player.*
-            // and persist even if the IIFE throws partway through.
             if let Err(_) = ctx.eval::<rquickjs::Value, _>(player_js.as_str()) {
                 let exc = format_js_exception(&ctx);
                 tracing::debug!(exc, "player JS threw (tolerated)");
@@ -1012,10 +1175,30 @@ async fn decrypt_nsig(encrypted: &str) -> Option<String> {
 /// Decrypt a YouTube `signatureCipher` value (base64 or raw encrypted sig).
 pub async fn decrypt_sig(encrypted: &str) -> Option<String> {
     let info = player_info().await;
+    let s_json = serde_json::to_string(encrypted).ok()?;
 
-    // Classic path: self-contained snippet defines __sig(a).
+    // Fast path: use the persistent worker (pre-loaded context).
+    if let Some(tx) = js_worker(&info) {
+        let code = if info.sig_js.is_some() {
+            // __sig is defined in the worker context via build_preload.
+            format!("__sig({s_json})")
+        } else if info.sig_injection.is_some() {
+            // _yt_player.__sig was injected before the IIFE body during preload.
+            format!("_yt_player.__sig({s_json})")
+        } else {
+            tracing::warn!("no sig_js or sig_injection available for decrypt_sig");
+            return None;
+        };
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        tx.send(JsTask { code, reply: reply_tx }).ok()?;
+        return reply_rx.await.ok().flatten();
+    }
+
+    // Fallback: spawn_blocking with fresh Runtime (worker failed to init).
+    let encrypted = encrypted.to_owned();
+
     if let Some(sig_js) = info.sig_js.as_deref() {
-        let encrypted = encrypted.to_owned();
         let sig_js = sig_js.to_owned();
         return tokio::task::spawn_blocking(move || {
             let rt = rquickjs::Runtime::new().ok()?;
@@ -1032,31 +1215,20 @@ pub async fn decrypt_sig(encrypted: &str) -> Option<String> {
         .flatten();
     }
 
-    // Modern path: inject g.__sig before IIFE close, eval full player JS, call _yt_player.__sig.
     let (Some(injection), Some(player_js)) =
         (info.sig_injection.as_deref(), info.player_js.as_deref())
     else {
         tracing::warn!("no sig_js or sig_injection available for decrypt_sig");
         return None;
     };
-    let encrypted = encrypted.to_owned();
     let injection = injection.to_owned();
     let player_js = player_js.to_owned();
 
     tokio::task::spawn_blocking(move || {
-        // Inject g.__sig at the START of the IIFE body so it is always registered
-        // even if the player JS throws later. The closure resolves RO/ze/Lg at
-        // call time (not definition time), so they are available as long as their
-        // own assignment statements ran before any throw.
         const IIFE_OPEN: &str = "(function(g){";
         let iife_start = player_js.find(IIFE_OPEN)?;
         let inject_at = iife_start + IIFE_OPEN.len();
-        let patched = format!(
-            "{}{}\n{}",
-            &player_js[..inject_at],
-            injection,
-            &player_js[inject_at..]
-        );
+        let patched = format!("{}{}\n{}", &player_js[..inject_at], injection, &player_js[inject_at..]);
 
         let rt = rquickjs::Runtime::new().ok()?;
         let ctx = rquickjs::Context::full(&rt).ok()?;
