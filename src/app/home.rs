@@ -74,11 +74,10 @@ impl Component for Home {
 
         let sidebar_width = sidebar_anim.read().value();
 
-        // ── callbacks ─────────────────────────────────────────────────────
-        let on_open: Rc<RefCell<dyn FnMut()>> =
-            Rc::new(RefCell::new(move || sidebar_open.set(true)));
-        let on_close: Rc<RefCell<dyn FnMut()>> =
-            Rc::new(RefCell::new(move || sidebar_open.set(false)));
+        // Single stable callback — reads current state at press time, so
+        // HomeBar never needs to re-render when the sidebar toggles.
+        let on_toggle: Rc<RefCell<dyn FnMut()>> =
+            Rc::new(RefCell::new(move || sidebar_open.set(!*sidebar_open.read())));
 
         // ── layout ────────────────────────────────────────────────────────
         // HomeBar is full-width and sits above the sidebar+content split so
@@ -87,7 +86,7 @@ impl Component for Home {
             .vertical()
             .expanded()
             .child(HomeBar {
-                on_menu: (!open).then_some(on_open).or(Some(on_close)),
+                on_menu: Some(on_toggle),
                 show_back_btn: false,
             })
             .child(
