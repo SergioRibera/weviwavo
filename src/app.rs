@@ -1,7 +1,10 @@
-use freya::{prelude::*, router::*};
-use freya::radio::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-use crate::components::{LoadingBar, PlayerBar};
+use freya::animation::*;
+use freya::{prelude::*, router::*};
+
+use crate::components::{HomeBar, LoadingBar, PlayerBar, Sidebar};
 
 mod album;
 mod artist;
@@ -31,30 +34,41 @@ pub enum Route {
 
 #[derive(Clone)]
 pub struct MainApp {
-    pub radio: RadioStation<Data, DataChannel>,
+    pub radio: freya::radio::RadioStation<Data, DataChannel>,
 }
 
 impl App for MainApp {
     fn render(&self) -> impl IntoElement {
+        use freya::radio::use_share_radio;
         use_share_radio(move || self.radio);
         use_init_theme(|| PreferredTheme::Dark.to_theme());
         Router::<Route>::new(|| RouterConfig::default().with_initial_path(Route::Home))
     }
 }
 
-/// Shared layout rendered around every page: background gradient + loading bar + player bar.
+/// Shared layout: loading bar + HomeBar + [Sidebar | page content] + player bar.
 #[derive(PartialEq)]
 struct AppLayout;
 
+const SIDEBAR_COLLAPSED: f32 = 72.;
+const SIDEBAR_EXPANDED: f32 = 240.;
+const SIDEBAR_THRESHOLD: f32 = 140.; // below this → icon-only mode
+
 impl Component for AppLayout {
     fn render(&self) -> impl IntoElement {
-        // ── hooks ────────────────────────────────────────────────────────────
+        use freya::radio::use_radio;
+
+        // ── radio ─────────────────────────────────────────────────────────
         let player_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
         let auth_radio = use_radio::<Data, DataChannel>(DataChannel::Auth);
         let router = RouterContext::get();
 
-        // Guard against pushing the same route more than once per navigation.
+        // ── route ─────────────────────────────────────────────────────────
+        let current_route = use_route::<Route>();
+        let show_back = !matches!(current_route, Route::Home);
+
+        // ── delayed navigation guard ──────────────────────────────────────
         let mut route_pushed = use_state(|| false);
 
         let has_player = !player_radio.read().player.title.is_empty();
@@ -72,9 +86,6 @@ impl Component for AppLayout {
         let nav_cmd = nav_state.nav_cmd.clone();
         drop(nav_state);
 
-        // ── delayed navigation ────────────────────────────────────────────────
-        // Push the route only once data has arrived, so the old page stays
-        // visible while the bar sweeps.
         if !is_loading && !*route_pushed.read() {
             if let Some(ref pid) = pending_id {
                 if loaded_id.as_deref() == Some(pid.as_str()) {
@@ -86,12 +97,31 @@ impl Component for AppLayout {
                 }
             }
         }
-        // Reset guard when pending_id has been cleared by the nav engine.
         if pending_id.is_none() && *route_pushed.read() {
             route_pushed.set(false);
         }
 
-        // ── layout ───────────────────────────────────────────────────────────
+        // ── sidebar animation ─────────────────────────────────────────────
+        let mut sidebar_open = use_state(|| false);
+        let mut prev_open = use_state(|| false);
+        let mut sidebar_anim = use_animation(|_| {
+            AnimNum::new(SIDEBAR_COLLAPSED, SIDEBAR_EXPANDED)
+                .function(Function::Sine)
+                .ease(Ease::InOut)
+                .time(250)
+        });
+
+        let open = *sidebar_open.read();
+        if open != *prev_open.read() {
+            if open { sidebar_anim.start() } else { sidebar_anim.reverse() }
+            prev_open.set(open);
+        }
+        let sidebar_width = sidebar_anim.read().value();
+
+        let on_toggle: Rc<RefCell<dyn FnMut()>> =
+            Rc::new(RefCell::new(move || sidebar_open.toggle()));
+
+        // ── layout ────────────────────────────────────────────────────────
         rect()
             .vertical()
             .expanded()
@@ -100,11 +130,23 @@ impl Component for AppLayout {
             .background(Color::BLACK)
             .child(ContextMenuViewer::new())
             .child(LoadingBar { active: is_loading })
+            .child(HomeBar {
+                on_menu: Some(on_toggle),
+                show_back_btn: show_back,
+            })
             .child(
                 rect()
+                    .horizontal()
                     .width(Size::Fill)
                     .height(Size::flex(1.0))
-                    .child(Outlet::<Route>::new()),
+                    .child(Sidebar { width: sidebar_width })
+                    .child(
+                        rect()
+                            .vertical()
+                            .width(Size::flex(1.0))
+                            .height(Size::Fill)
+                            .child(Outlet::<Route>::new()),
+                    ),
             )
             .maybe_child(has_player.then(PlayerBar::default))
             .maybe_child(oauth_pending.map(|(code, url)| OAuthPrompt { code, url }))
@@ -132,11 +174,7 @@ impl Component for OAuthPrompt {
                             .font_size(14.)
                             .text(format!("Visit:  {}", self.url)),
                     )
-                    .child(
-                        label()
-                            .font_size(28.)
-                            .text(self.code.clone()),
-                    )
+                    .child(label().font_size(28.).text(self.code.clone()))
                     .child(
                         label()
                             .font_size(12.)

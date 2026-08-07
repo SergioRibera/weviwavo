@@ -7,7 +7,7 @@ use freya::radio::use_radio;
 
 use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData};
 use crate::audio::{AudioCommand, AudioQuality};
-use crate::components::{HomeBar, PlaylistSongRow, SongInfo};
+use crate::components::{PlaylistSongRow, SongInfo};
 
 #[derive(Clone, Copy, PartialEq)]
 enum WindowSize {
@@ -87,17 +87,9 @@ impl Component for Playlist {
         // ── loading state ─────────────────────────────────────────────────────
         if loaded.is_none() {
             return rect()
-                .vertical()
                 .expanded()
-                .content(Content::Flex)
-                .child(HomeBar { on_menu: None, show_back_btn: true })
-                .child(
-                    rect()
-                        .width(Size::Fill)
-                        .height(Size::flex(1.0))
-                        .center()
-                        .child(label().text("Cargando...").color(Color::WHITE.with_a(180))),
-                );
+                .center()
+                .child(label().text("Cargando...").color(Color::WHITE.with_a(180)));
         }
 
         let pv = loaded.unwrap();
@@ -107,7 +99,6 @@ impl Component for Playlist {
             .vertical()
             .expanded()
             .content(Content::Flex)
-            .child(HomeBar { on_menu: None, show_back_btn: true })
             .child(
                 rect().width(Size::Fill).height(Size::flex(1.0)).child(
                     ScrollView::new()

@@ -6,8 +6,9 @@ use freya::radio::use_radio;
 
 use crate::app::{Data, DataChannel, NavCommand};
 
-const SIDEBAR_BG: &str = "#111111";
 const SELECTED_BG: &str = "#282828";
+/// Below this width the sidebar shows icons/thumbnails only.
+const COLLAPSED_THRESHOLD: f32 = 140.;
 
 pub struct Sidebar {
     pub width: f32,
@@ -19,31 +20,57 @@ impl PartialEq for Sidebar {
     }
 }
 
-fn nav_btn(icon: bytes::Bytes, text: &'static str, active: bool) -> impl IntoElement {
-    rect()
-        .horizontal()
-        .width(Size::Fill)
-        .height(Size::px(44.))
-        .corner_radius(8.)
-        .padding(Gaps::new_symmetric(0., 12.))
-        .spacing(12.)
-        .cross_align(Alignment::Center)
-        .background(if active {
-            Color::from_hex(SELECTED_BG).unwrap()
-        } else {
-            Color::TRANSPARENT
-        })
-        .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-        .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-        .on_press(|_| {})
-        .child(
-            SvgViewer::new(icon)
-                .color(Color::WHITE)
-                .fill(Color::WHITE)
-                .width(Size::px(20.))
-                .height(Size::px(20.)),
-        )
-        .child(label().font_size(15.).color(Color::WHITE).text(text))
+fn nav_btn(
+    icon: bytes::Bytes,
+    text: &'static str,
+    active: bool,
+    collapsed: bool,
+) -> impl IntoElement {
+    let bg = if active {
+        Color::from_hex(SELECTED_BG).unwrap()
+    } else {
+        Color::TRANSPARENT
+    };
+
+    if collapsed {
+        rect()
+            .center()
+            .width(Size::Fill)
+            .height(Size::px(44.))
+            .corner_radius(8.)
+            .background(bg)
+            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+            .on_press(|_| {})
+            .child(
+                SvgViewer::new(icon)
+                    .color(Color::WHITE)
+                    .fill(Color::WHITE)
+                    .width(Size::px(20.))
+                    .height(Size::px(20.)),
+            )
+    } else {
+        rect()
+            .horizontal()
+            .width(Size::Fill)
+            .height(Size::px(44.))
+            .corner_radius(8.)
+            .padding(Gaps::new_symmetric(0., 12.))
+            .spacing(12.)
+            .cross_align(Alignment::Center)
+            .background(bg)
+            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+            .on_press(|_| {})
+            .child(
+                SvgViewer::new(icon)
+                    .color(Color::WHITE)
+                    .fill(Color::WHITE)
+                    .width(Size::px(20.))
+                    .height(Size::px(20.)),
+            )
+            .child(label().font_size(15.).color(Color::WHITE).text(text))
+    }
 }
 
 impl Component for Sidebar {
@@ -57,12 +84,12 @@ impl Component for Sidebar {
         drop(yt_state);
 
         let nav_cmd = nav_radio.read().nav_cmd.clone();
+        let collapsed = self.width < COLLAPSED_THRESHOLD;
 
         rect()
             .vertical()
             .width(Size::px(self.width))
             .height(Size::Fill)
-            .background(Color::from_hex(SIDEBAR_BG).unwrap())
             .overflow(Overflow::Clip)
             .padding(Gaps::new(8., 12., 8., 12.))
             .spacing(4.)
@@ -73,8 +100,8 @@ impl Component for Sidebar {
                     .fill(Color::from_hex("#292929").unwrap()),
             )
             // ── nav buttons ───────────────────────────────────────────────
-            .child(nav_btn(house(), "Inicio", true))
-            .child(nav_btn(bookmark(), "Mi biblioteca", false))
+            .child(nav_btn(house(), "Inicio", true, collapsed))
+            .child(nav_btn(bookmark(), "Mi biblioteca", false, collapsed))
             // ── separator ─────────────────────────────────────────────────
             .child(
                 rect()
@@ -83,116 +110,131 @@ impl Component for Sidebar {
                     .background(Color::from_hex("#2A2A2A").unwrap()),
             )
             // ── library (only when logged in) ─────────────────────────────
-            .maybe_child(
-                is_logged_in.then_some(
-                    rect()
-                        .vertical()
-                        .width(Size::Fill)
-                        .height(Size::flex(1.0))
-                        .spacing(2.)
-                        .child(
-                            rect()
-                                .horizontal()
-                                .width(Size::Fill)
-                                .height(Size::px(40.))
-                                .corner_radius(8.)
-                                .padding(Gaps::new_symmetric(0., 12.))
-                                .spacing(8.)
-                                .cross_align(Alignment::Center)
-                                .background(Color::from_hex("#282828").unwrap())
-                                .on_press(|_| {})
-                                .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                                .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                                .child(
-                                    SvgViewer::new(plus())
-                                        .color(Color::WHITE)
-                                        .fill(Color::WHITE)
-                                        .width(Size::px(16.))
-                                        .height(Size::px(16.)),
-                                )
-                                .child(
-                                    label()
-                                        .font_size(14.)
-                                        .color(Color::WHITE)
-                                        .text("Nueva lista"),
-                                ),
-                        )
-                        .child(
-                            ScrollView::new()
-                                .direction(Direction::Vertical)
-                                .show_scrollbar(false)
-                                .width(Size::Fill)
-                                .height(Size::flex(1.0))
-                                .children(playlists.into_iter().map(|p| {
-                                    let id = p.id.clone();
-                                    let name = p.title.clone();
-                                    let sub = p.author.clone().unwrap_or_default();
-                                    let thumb =
-                                        p.thumbnail.as_deref().and_then(|u| Url::from_str(u).ok());
-                                    let nav = nav_cmd.clone();
+            .maybe_child(is_logged_in.then_some({
+                let playlists_inner = playlists.clone();
+                let nav_cmd_inner = nav_cmd.clone();
+                rect()
+                    .vertical()
+                    .width(Size::Fill)
+                    .height(Size::flex(1.0))
+                    .spacing(2.)
+                    // "Nueva lista" button
+                    .child(if collapsed {
+                        rect()
+                            .center()
+                            .width(Size::Fill)
+                            .height(Size::px(40.))
+                            .corner_radius(8.)
+                            .background(Color::from_hex("#282828").unwrap())
+                            .on_press(|_| {})
+                            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                            .child(
+                                SvgViewer::new(plus())
+                                    .color(Color::WHITE)
+                                    .fill(Color::WHITE)
+                                    .width(Size::px(16.))
+                                    .height(Size::px(16.)),
+                            )
+                    } else {
+                        rect()
+                            .horizontal()
+                            .width(Size::Fill)
+                            .height(Size::px(40.))
+                            .corner_radius(8.)
+                            .padding(Gaps::new_symmetric(0., 12.))
+                            .spacing(8.)
+                            .cross_align(Alignment::Center)
+                            .background(Color::from_hex("#282828").unwrap())
+                            .on_press(|_| {})
+                            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                            .child(
+                                SvgViewer::new(plus())
+                                    .color(Color::WHITE)
+                                    .fill(Color::WHITE)
+                                    .width(Size::px(16.))
+                                    .height(Size::px(16.)),
+                            )
+                            .child(
+                                label()
+                                    .font_size(14.)
+                                    .color(Color::WHITE)
+                                    .text("Nueva lista"),
+                            )
+                    })
+                    .child(
+                        ScrollView::new()
+                            .direction(Direction::Vertical)
+                            .show_scrollbar(false)
+                            .width(Size::Fill)
+                            .height(Size::flex(1.0))
+                            .children(playlists_inner.into_iter().map(|p| {
+                                let id = p.id.clone();
+                                let name = p.title.clone();
+                                let sub = p.author.clone().unwrap_or_default();
+                                let thumb =
+                                    p.thumbnail.as_deref().and_then(|u| Url::from_str(u).ok());
+                                let nav = nav_cmd_inner.clone();
+                                let press_id = id.clone();
+                                let press_nav = nav.clone();
 
-                                    rect()
-                                        .horizontal()
-                                        .cross_align(Alignment::Center)
-                                        .width(Size::Fill)
-                                        .height(Size::px(56.))
-                                        .corner_radius(6.)
-                                        .padding(Gaps::new_symmetric(0., 4.))
-                                        .spacing(10.)
-                                        .on_press(move |_| {
-                                            if let Some(ref tx) = nav {
-                                                tx.try_send(NavCommand::BeginNavigation {
-                                                    playlist_id: id.clone(),
-                                                })
-                                                .ok();
-                                                tx.try_send(NavCommand::LoadPlaylist(id.clone()))
-                                                    .ok();
-                                            }
-                                        })
-                                        .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                                        .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                                        .child(
-                                            rect()
-                                                .width(Size::px(44.))
-                                                .height(Size::px(44.))
-                                                .corner_radius(6.)
-                                                .overflow(Overflow::Clip)
-                                                .background(
-                                                    Color::from_hex("#333333").unwrap(),
-                                                )
-                                                .maybe_child(thumb.map(|url| {
-                                                    ImageViewer::new(url)
-                                                        .expanded()
-                                                        .image_cover(ImageCover::Center)
-                                                })),
-                                        )
-                                        .child(
-                                            rect()
-                                                .vertical()
-                                                .width(Size::flex(1.0))
-                                                .spacing(2.)
-                                                .child(
-                                                    label()
-                                                        .max_lines(1)
-                                                        .text_overflow(TextOverflow::Ellipsis)
-                                                        .font_size(14.)
-                                                        .color(Color::WHITE)
-                                                        .text(name),
-                                                )
-                                                .child(
-                                                    label()
-                                                        .max_lines(1)
-                                                        .font_size(12.)
-                                                        .color(
-                                                            Color::from_hex("#888888").unwrap(),
-                                                        )
-                                                        .text(sub),
-                                                ),
-                                        )
-                                        .into_element()
-                                })),
-                        ),
-                ),
-            )
+                                let thumb_rect = rect()
+                                    .width(Size::px(44.))
+                                    .height(Size::px(44.))
+                                    .corner_radius(6.)
+                                    .overflow(Overflow::Clip)
+                                    .maybe_child(thumb.map(|url| {
+                                        ImageViewer::new(url)
+                                            .expanded()
+                                            .image_cover(ImageCover::Center)
+                                    }));
+
+                                rect()
+                                    .horizontal()
+                                    .cross_align(Alignment::Center)
+                                    .width(Size::Fill)
+                                    .height(Size::px(56.))
+                                    .corner_radius(6.)
+                                    .overflow(Overflow::Clip)
+                                    .padding(Gaps::new_symmetric(0., 4.))
+                                    .spacing(10.)
+                                    .on_press(move |_| {
+                                        if let Some(ref tx) = nav {
+                                            tx.try_send(NavCommand::BeginNavigation {
+                                                playlist_id: id.clone(),
+                                            })
+                                            .ok();
+                                            tx.try_send(NavCommand::LoadPlaylist(id.clone())).ok();
+                                        }
+                                    })
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .child(thumb_rect)
+                                    .child(
+                                        rect()
+                                            .vertical()
+                                            .width(Size::flex(1.0))
+                                            .spacing(2.)
+                                            .child(
+                                                label()
+                                                    .max_lines(1)
+                                                    .text_overflow(TextOverflow::Ellipsis)
+                                                    .font_size(14.)
+                                                    .color(Color::WHITE)
+                                                    .text(name),
+                                            )
+                                            .child(
+                                                label()
+                                                    .max_lines(1)
+                                                    .font_size(12.)
+                                                    .color(Color::from_hex("#888888").unwrap())
+                                                    .text(sub),
+                                            ),
+                                    )
+                                    .into_element()
+                            })),
+                    )
+            }))
     }
 }
