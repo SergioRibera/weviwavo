@@ -60,6 +60,7 @@ fn sig_injection_from_expr(expr: &str) -> Box<str> {
         .into_boxed_str()
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct PlayerInfo {
     nfunc_js: Option<Box<str>>,
     /// nClass name (e.g. "yk") for QWO players when delegation trace fails.
@@ -78,6 +79,55 @@ const PLAYER_TTL: Duration = Duration::from_secs(6 * 3600);
 
 fn player_cache() -> &'static RwLock<Option<(Arc<PlayerInfo>, Instant)>> {
     PLAYER_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+// ── Disk cache for PlayerInfo ─────────────────────────────────────────────────
+//
+// Persisted to `$XDG_CACHE_HOME/weviwavo/player_cache.json`.
+// Avoids re-downloading + re-parsing base.js (~2-3 MB) on every app restart.
+// The on-disk TTL matches PLAYER_TTL (6h).
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct DiskCache {
+    fetched_unix: u64,
+    info: PlayerInfo,
+}
+
+fn player_cache_path() -> std::path::PathBuf {
+    crate::utils::cache_dir(&["player_cache.json"])
+}
+
+fn load_disk_cache() -> Option<PlayerInfo> {
+    let path = player_cache_path();
+    let bytes = std::fs::read(&path).ok()?;
+    let cached: DiskCache = serde_json::from_slice(&bytes).ok()?;
+
+    let age = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .saturating_sub(std::time::Duration::from_secs(cached.fetched_unix));
+
+    if age > PLAYER_TTL {
+        tracing::debug!("disk player cache expired");
+        return None;
+    }
+
+    tracing::debug!("loaded player info from disk cache");
+    Some(cached.info)
+}
+
+fn save_disk_cache(info: PlayerInfo) {
+    let fetched_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let Ok(bytes) = serde_json::to_vec(&DiskCache { fetched_unix, info }) else { return };
+    let path = player_cache_path();
+    if let Err(e) = std::fs::write(&path, &bytes) {
+        tracing::warn!(error = %e, "failed to write player disk cache");
+    } else {
+        tracing::debug!(path = %path.display(), bytes = bytes.len(), "player info cached to disk");
+    }
 }
 
 fn shared_client() -> &'static reqwest::Client {
@@ -764,7 +814,7 @@ async fn fetch_player_info_inner() -> PlayerInfo {
 }
 
 async fn player_info() -> Arc<PlayerInfo> {
-    // Fast path: valid cached entry within TTL.
+    // Fast path: valid in-memory cached entry within TTL.
     {
         let guard = player_cache().read().await;
         if let Some((info, fetched)) = guard.as_ref() {
@@ -780,8 +830,21 @@ async fn player_info() -> Arc<PlayerInfo> {
             return Arc::clone(info);
         }
     }
-    tracing::debug!("refreshing player JS (TTL expired or first load)");
-    let info = Arc::new(fetch_player_info_inner().await);
+
+    // Try disk cache before hitting the network.
+    let info = if let Some(disk) = tokio::task::spawn_blocking(load_disk_cache).await.ok().flatten() {
+        tracing::debug!("player info restored from disk cache (skipping base.js download)");
+        disk
+    } else {
+        tracing::debug!("refreshing player JS (TTL expired or first load)");
+        let fresh = fetch_player_info_inner().await;
+        // Save to disk in background — clone is cheap relative to the network fetch.
+        let to_save = fresh.clone();
+        tokio::task::spawn_blocking(move || save_disk_cache(to_save));
+        fresh
+    };
+
+    let info = Arc::new(info);
     *guard = Some((Arc::clone(&info), Instant::now()));
     info
 }

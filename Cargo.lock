@@ -11416,6 +11416,7 @@ dependencies = [
  "reqwest",
  "rodio",
  "rquickjs",
+ "serde",
  "serde_json",
  "servo-webview",
  "sha1_smol",
