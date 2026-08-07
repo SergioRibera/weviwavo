@@ -68,7 +68,11 @@ impl Component for Home {
 
         let open = *sidebar_open.read();
         if open != *prev_open.read() {
-            if open { sidebar_anim.start() } else { sidebar_anim.reverse() }
+            if open {
+                sidebar_anim.start()
+            } else {
+                sidebar_anim.reverse()
+            }
             prev_open.set(open);
         }
 
@@ -77,7 +81,7 @@ impl Component for Home {
         // Single stable callback — reads current state at press time, so
         // HomeBar never needs to re-render when the sidebar toggles.
         let on_toggle: Rc<RefCell<dyn FnMut()>> =
-            Rc::new(RefCell::new(move || sidebar_open.set(!*sidebar_open.read())));
+            Rc::new(RefCell::new(move || sidebar_open.toggle()));
 
         // ── layout ────────────────────────────────────────────────────────
         // HomeBar is full-width and sits above the sidebar+content split so

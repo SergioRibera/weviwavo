@@ -66,6 +66,12 @@ impl Component for Sidebar {
             .overflow(Overflow::Clip)
             .padding(Gaps::new(8., 12., 8., 12.))
             .spacing(4.)
+            .border(
+                Border::new()
+                    .alignment(BorderAlignment::Outer)
+                    .width(1.)
+                    .fill(Color::from_hex("#292929").unwrap()),
+            )
             // ── nav buttons ───────────────────────────────────────────────
             .child(nav_btn(house(), "Inicio", true))
             .child(nav_btn(bookmark(), "Mi biblioteca", false))

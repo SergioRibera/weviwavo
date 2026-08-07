@@ -36,23 +36,31 @@ impl Component for HomeBar {
             .spacing(16.)
             .background(Color::TRANSPARENT)
             .blur(25.)
-            .maybe_child(show_back.then_some(
-                rect()
-                    .center()
-                    .width(Size::px(36.))
-                    .height(Size::px(36.))
-                    .rounded_full()
-                    .on_press(move |_| router.go_back())
-                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                    .child(
-                        SvgViewer::new(chevron_left())
-                            .color(Color::WHITE)
-                            .fill(Color::WHITE)
-                            .width(Size::px(20.))
-                            .height(Size::px(20.)),
-                    ),
-            ))
+            .border(
+                Border::new()
+                    .alignment(BorderAlignment::Outer)
+                    .width(1.)
+                    .fill(Color::from_hex("#292929").unwrap()),
+            )
+            .maybe_child(
+                show_back.then_some(
+                    rect()
+                        .center()
+                        .width(Size::px(36.))
+                        .height(Size::px(36.))
+                        .rounded_full()
+                        .on_press(move |_| router.go_back())
+                        .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                        .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                        .child(
+                            SvgViewer::new(chevron_left())
+                                .color(Color::WHITE)
+                                .fill(Color::WHITE)
+                                .width(Size::px(20.))
+                                .height(Size::px(20.)),
+                        ),
+                ),
+            )
             .maybe_child(on_menu.map(|cb| {
                 rect()
                     .center()

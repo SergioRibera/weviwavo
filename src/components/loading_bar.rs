@@ -36,7 +36,9 @@ impl Component for LoadingBar {
         rect()
             .width(Size::Fill)
             .height(Size::px(3.))
+            .layer(Layer::Overlay)
             .overflow(Overflow::Clip)
+            .position(Position::new_absolute().top(0.))
             .maybe_child(active.then(|| {
                 rect()
                     .width(Size::px(bar_w))
