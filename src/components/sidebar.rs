@@ -7,8 +7,6 @@ use freya::radio::use_radio;
 use crate::app::{Data, DataChannel, NavCommand};
 
 const SELECTED_BG: &str = "#282828";
-/// Below this width the sidebar shows icons/thumbnails only.
-const COLLAPSED_THRESHOLD: f32 = 140.;
 
 pub struct Sidebar {
     pub width: f32,
@@ -20,57 +18,53 @@ impl PartialEq for Sidebar {
     }
 }
 
-fn nav_btn(
-    icon: bytes::Bytes,
-    text: &'static str,
-    active: bool,
-    collapsed: bool,
-) -> impl IntoElement {
+fn nav_btn(icon: bytes::Bytes, text: &'static str, active: bool) -> impl IntoElement {
     let bg = if active {
         Color::from_hex(SELECTED_BG).unwrap()
     } else {
         Color::TRANSPARENT
     };
 
-    if collapsed {
-        rect()
-            .center()
-            .width(Size::Fill)
-            .height(Size::px(44.))
-            .corner_radius(8.)
-            .background(bg)
-            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-            .on_press(|_| {})
-            .child(
-                SvgViewer::new(icon)
-                    .color(Color::WHITE)
-                    .fill(Color::WHITE)
-                    .width(Size::px(20.))
-                    .height(Size::px(20.)),
-            )
-    } else {
-        rect()
-            .horizontal()
-            .width(Size::Fill)
-            .height(Size::px(44.))
-            .corner_radius(8.)
-            .padding(Gaps::new_symmetric(0., 12.))
-            .spacing(12.)
-            .cross_align(Alignment::Center)
-            .background(bg)
-            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-            .on_press(|_| {})
-            .child(
-                SvgViewer::new(icon)
-                    .color(Color::WHITE)
-                    .fill(Color::WHITE)
-                    .width(Size::px(20.))
-                    .height(Size::px(20.)),
-            )
-            .child(label().font_size(15.).color(Color::WHITE).text(text))
-    }
+    rect()
+        .horizontal()
+        .width(Size::Fill)
+        .height(Size::px(44.))
+        .corner_radius(8.)
+        .overflow(Overflow::Clip)
+        .content(Content::Flex)
+        .spacing(8.)
+        .cross_align(Alignment::Center)
+        .main_align(Alignment::Start)
+        .background(bg)
+        .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+        .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+        .on_press(|_| {})
+        .child(
+            rect()
+                .center()
+                .width(Size::px(48.))
+                .height(Size::px(44.))
+                .child(
+                    SvgViewer::new(icon)
+                        .color(Color::WHITE)
+                        .width(Size::px(20.))
+                        .height(Size::px(20.)),
+                ),
+        )
+        .child(
+            rect()
+                .width(Size::flex(1.0))
+                .overflow(Overflow::Clip)
+                .cross_align(Alignment::Start)
+                .child(
+                    label()
+                        .font_size(15.)
+                        .color(Color::WHITE)
+                        .text(text)
+                        .max_lines(1)
+                        .text_overflow(TextOverflow::Ellipsis),
+                ),
+        )
 }
 
 impl Component for Sidebar {
@@ -84,7 +78,6 @@ impl Component for Sidebar {
         drop(yt_state);
 
         let nav_cmd = nav_radio.read().nav_cmd.clone();
-        let collapsed = self.width < COLLAPSED_THRESHOLD;
 
         rect()
             .vertical()
@@ -100,8 +93,8 @@ impl Component for Sidebar {
                     .fill(Color::from_hex("#292929").unwrap()),
             )
             // ── nav buttons ───────────────────────────────────────────────
-            .child(nav_btn(house(), "Inicio", true, collapsed))
-            .child(nav_btn(bookmark(), "Mi biblioteca", false, collapsed))
+            .child(nav_btn(house(), "Inicio", true))
+            .child(nav_btn(bookmark(), "Mi biblioteca", false))
             // ── separator ─────────────────────────────────────────────────
             .child(
                 rect()
@@ -119,50 +112,48 @@ impl Component for Sidebar {
                     .height(Size::flex(1.0))
                     .spacing(2.)
                     // "Nueva lista" button
-                    .child(if collapsed {
-                        rect()
-                            .center()
-                            .width(Size::Fill)
-                            .height(Size::px(40.))
-                            .corner_radius(8.)
-                            .background(Color::from_hex("#282828").unwrap())
-                            .on_press(|_| {})
-                            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                            .child(
-                                SvgViewer::new(plus())
-                                    .color(Color::WHITE)
-                                    .fill(Color::WHITE)
-                                    .width(Size::px(16.))
-                                    .height(Size::px(16.)),
-                            )
-                    } else {
+                    .child(
                         rect()
                             .horizontal()
                             .width(Size::Fill)
                             .height(Size::px(40.))
                             .corner_radius(8.)
-                            .padding(Gaps::new_symmetric(0., 12.))
+                            .overflow(Overflow::Clip)
+                            .content(Content::Flex)
                             .spacing(8.)
                             .cross_align(Alignment::Center)
+                            .main_align(Alignment::Start)
                             .background(Color::from_hex("#282828").unwrap())
                             .on_press(|_| {})
                             .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
                             .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
                             .child(
-                                SvgViewer::new(plus())
-                                    .color(Color::WHITE)
-                                    .fill(Color::WHITE)
-                                    .width(Size::px(16.))
-                                    .height(Size::px(16.)),
+                                rect()
+                                    .center()
+                                    .width(Size::px(48.))
+                                    .height(Size::px(48.))
+                                    .child(
+                                        SvgViewer::new(plus())
+                                            .color(Color::WHITE)
+                                            .width(Size::px(16.))
+                                            .height(Size::px(16.)),
+                                    ),
                             )
                             .child(
-                                label()
-                                    .font_size(14.)
-                                    .color(Color::WHITE)
-                                    .text("Nueva lista"),
-                            )
-                    })
+                                rect()
+                                    .width(Size::flex(1.0))
+                                    .overflow(Overflow::Clip)
+                                    .cross_align(Alignment::Start)
+                                    .child(
+                                        label()
+                                            .font_size(14.)
+                                            .color(Color::WHITE)
+                                            .text("Nueva lista")
+                                            .max_lines(1)
+                                            .text_overflow(TextOverflow::Ellipsis),
+                                    ),
+                            ),
+                    )
                     .child(
                         ScrollView::new()
                             .direction(Direction::Vertical)
@@ -228,6 +219,7 @@ impl Component for Sidebar {
                                                 label()
                                                     .max_lines(1)
                                                     .font_size(12.)
+                                                    .text_overflow(TextOverflow::Ellipsis)
                                                     .color(Color::from_hex("#888888").unwrap())
                                                     .text(sub),
                                             ),
