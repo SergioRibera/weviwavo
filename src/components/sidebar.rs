@@ -1,12 +1,10 @@
-use std::{
-    str::FromStr,
-    time::Duration,
-};
+use std::time::Duration;
 
 use freya::icons::lucide::{bookmark, house, plus};
 use freya::prelude::*;
 use freya::radio::use_radio;
 
+use super::cached_image_source;
 use crate::app::{Data, DataChannel, NavCommand};
 
 const SELECTED_BG: &str = "#282828";
@@ -189,8 +187,8 @@ impl Component for Sidebar {
                                 let name = p.title.clone();
                                 let tooltip_name = name.clone();
                                 let sub = p.author.clone().unwrap_or_default();
-                                let thumb =
-                                    p.thumbnail.as_deref().and_then(|u| Url::from_str(u).ok());
+                                let thumb_src =
+                                    p.thumbnail.as_deref().and_then(cached_image_source);
                                 let nav = nav_cmd_inner.clone();
 
                                 let thumb_rect = rect()
@@ -198,8 +196,8 @@ impl Component for Sidebar {
                                     .height(Size::px(44.))
                                     .corner_radius(6.)
                                     .overflow(Overflow::Clip)
-                                    .maybe_child(thumb.map(|url| {
-                                        ImageViewer::new(url)
+                                    .maybe_child(thumb_src.map(|src| {
+                                        ImageViewer::new(src)
                                             .expanded()
                                             .image_cover(ImageCover::Center)
                                     }));

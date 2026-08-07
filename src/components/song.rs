@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use freya::animation::*;
 use freya::icons::lucide::{audio_lines, play};
 use freya::prelude::*;
@@ -7,7 +5,7 @@ use freya::radio::use_radio;
 use freya::router::RouterContext;
 use ytdroid::models::YTItem;
 
-use super::TextInfo;
+use super::{TextInfo, use_cached_thumbnail};
 use crate::app::{Data, DataChannel, NavCommand, Route};
 use crate::audio::{AudioCommand, AudioQuality};
 
@@ -180,6 +178,7 @@ impl<'a> From<&'a YTItem> for SongInfo {
 impl Component for SongInfo {
     fn render(&self) -> impl IntoElement {
         let mut hover = use_state(|| false);
+        let thumb_src = use_cached_thumbnail(&self.thumbnail);
         let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let (is_playing, audio_cmd) = {
             let s = audio_radio.read();
@@ -238,8 +237,8 @@ impl Component for SongInfo {
                         hover.set(false);
                     })
                     .on_secondary_down(move |_| ContextMenu::open(Menu::new()))
-                    .child(
-                        ImageViewer::new(Url::from_str(self.thumbnail.as_str()).unwrap())
+                    .maybe_child(thumb_src.clone().map(|src| {
+                        ImageViewer::new(src)
                             .expanded()
                             .center()
                             .image_cover(ImageCover::Center)
@@ -366,8 +365,8 @@ impl Component for SongInfo {
                                             .expanded(),
                                         ),
                                 ),
-                            ),
-                    ),
+                            )
+                    }))
             )
             .child(
                 rect()

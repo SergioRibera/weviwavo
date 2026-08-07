@@ -1,11 +1,10 @@
-use std::str::FromStr;
-
 use freya::icons::lucide::{ellipsis_vertical, play, thumbs_down, thumbs_up};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::router::RouterContext;
 use ytdroid::models::SongItem;
 
+use super::use_cached_thumbnail;
 use crate::app::{Data, DataChannel, QueueSong, Route};
 use crate::audio::{AudioCommand, AudioQuality};
 use crate::components::song_context_menu::song_context_menu;
@@ -49,6 +48,7 @@ impl Component for PlaylistSongRow {
         let mut thumb_hover = use_state(|| false);
         let mut artist_hover = use_state(|| false);
         let mut album_hover = use_state(|| false);
+        let thumb_src = use_cached_thumbnail(self.song.thumbnail.as_deref().unwrap_or(""));
 
         // ── data extraction ───────────────────────────────────────────────────
         let audio_cmd = audio_radio.read().audio_cmd.clone();
@@ -82,11 +82,6 @@ impl Component for PlaylistSongRow {
         let artist_id = self.song.artists.first().and_then(|a| a.id.clone());
         let album_name = self.song.album.as_ref().map(|a| a.name.clone()).unwrap_or_default();
         let album_id = self.song.album.as_ref().map(|a| a.id.clone());
-        let thumb_url = self
-            .song
-            .thumbnail
-            .as_deref()
-            .and_then(|u| Url::from_str(u).ok());
         let duration = self.song.duration.map(fmt_duration).unwrap_or_default();
 
         let is_suggestion = self.is_suggestion;
@@ -134,8 +129,6 @@ impl Component for PlaylistSongRow {
                 let artist_name = artist_name.clone();
                 let album_name = album_name.clone();
                 let thumbnail_url_str = thumbnail_url_str.clone();
-                let thumb_url_display = thumb_url.clone();
-
                 rect()
                     .width(Size::px(50.))
                     .height(Size::px(50.))
@@ -170,9 +163,9 @@ impl Component for PlaylistSongRow {
                             .ok();
                         }
                     })
-                    .maybe_child(thumb_url_display.map(|url| {
+                    .maybe_child(thumb_src.clone().map(|src| {
                         let hovered = *thumb_hover.read();
-                        ImageViewer::new(url)
+                        ImageViewer::new(src)
                             .expanded()
                             .image_cover(ImageCover::Center)
                             .child(

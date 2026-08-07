@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use bytes::Bytes;
 use freya::icons::lucide::{
     chevron_up, ellipsis_vertical, pause, play, repeat, shuffle, skip_back, skip_forward,
@@ -8,6 +6,7 @@ use freya::icons::lucide::{
 use freya::prelude::*;
 use freya::radio::use_radio;
 
+use super::use_cached_thumbnail;
 use crate::app::{Data, DataChannel};
 use crate::audio::AudioCommand;
 
@@ -62,6 +61,7 @@ impl Component for PlayerBar {
         let audio_cmd = state.audio_cmd.clone();
 
         let mut is_muted = use_state(|| false);
+        let thumb_src = use_cached_thumbnail(&thumbnail_url);
 
         let display_vol_pct = (if *is_muted.read() { 0.0 } else { volume }) * 100.0;
 
@@ -220,14 +220,14 @@ impl Component for PlayerBar {
                             .spacing(12.)
                             .cross_align(Alignment::Center)
                             .main_align(Alignment::Center)
-                            .maybe_child((!thumbnail_url.is_empty()).then(|| {
+                            .maybe_child(thumb_src.clone().map(|src| {
                                 rect()
                                     .width(Size::px(48.))
                                     .height(Size::px(48.))
                                     .overflow(Overflow::Clip)
                                     .corner_radius(4.)
                                     .child(
-                                        ImageViewer::new(Url::from_str(&thumbnail_url).unwrap())
+                                        ImageViewer::new(src)
                                             .expanded()
                                             .image_cover(ImageCover::Center),
                                     )

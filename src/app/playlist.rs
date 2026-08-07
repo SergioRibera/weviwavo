@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use freya::animation::*;
 use freya::icons::lucide::play;
 use freya::prelude::*;
@@ -7,7 +5,7 @@ use freya::radio::use_radio;
 
 use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData};
 use crate::audio::{AudioCommand, AudioQuality};
-use crate::components::{PlaylistSongRow, SongInfo};
+use crate::components::{PlaylistSongRow, SongInfo, cached_image_source, use_cached_thumbnail};
 
 #[derive(Clone, Copy, PartialEq)]
 enum WindowSize {
@@ -45,6 +43,16 @@ impl Component for Playlist {
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
         let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let mut last_requested = use_state(|| String::new());
+
+        // Derive thumbnail URL unconditionally so the hook is always called in order.
+        let thumb_url_str = nav_radio
+            .read()
+            .playlist_view
+            .as_ref()
+            .filter(|pv| pv.playlist.id == self.id)
+            .and_then(|pv| pv.playlist.thumbnail.clone())
+            .unwrap_or_default();
+        let playlist_thumb_src = use_cached_thumbnail(&thumb_url_str);
 
         // ── responsive width ─────────────────────────────────────────────────
         let current_width = platform.root_size.read().width;
@@ -110,7 +118,7 @@ impl Component for Playlist {
                                 .padding(Gaps::new_all(24.))
                                 .width(Size::Fill)
                                 .center()
-                                .child(render_content(pv, audio_cmd, max_width as f32)),
+                                .child(render_content(pv, audio_cmd, max_width as f32, playlist_thumb_src)),
                         ),
                 ),
             )
@@ -121,12 +129,8 @@ fn render_content(
     pv: PlaylistViewData,
     audio_cmd: Option<tokio::sync::mpsc::Sender<AudioCommand>>,
     max_width: f32,
+    thumbnail_src: Option<ImageSource>,
 ) -> Rect {
-    let thumbnail_url = pv
-        .playlist
-        .thumbnail
-        .as_deref()
-        .and_then(|u| Url::from_str(u).ok());
     let title = pv.playlist.title.clone();
     let author = pv.playlist.author.clone().unwrap_or_default();
     let song_count = pv.playlist.song_count_text.clone().unwrap_or_default();
@@ -154,7 +158,7 @@ fn render_content(
         // Narrow: horizontal row (thumbnail | info+play), full width.
         .child(render_header(
             is_wide,
-            thumbnail_url,
+            thumbnail_src,
             title,
             author,
             song_count,
@@ -229,7 +233,7 @@ fn render_content(
 
 fn render_header(
     is_wide: bool,
-    thumbnail_url: Option<Url>,
+    thumbnail_src: Option<ImageSource>,
     title: String,
     author: String,
     song_count: String,
@@ -246,8 +250,8 @@ fn render_header(
         .corner_radius(8.)
         .overflow(Overflow::Clip)
         .background(Color::from_hex("#333333").unwrap())
-        .maybe_child(thumbnail_url.map(|url| {
-            ImageViewer::new(url)
+        .maybe_child(thumbnail_src.map(|src| {
+            ImageViewer::new(src)
                 .expanded()
                 .image_cover(ImageCover::Center)
         }));

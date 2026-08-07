@@ -1,3 +1,4 @@
+mod cached_image;
 mod home_bar;
 mod hooks;
 mod loading_bar;
@@ -11,6 +12,7 @@ mod song;
 mod song_context_menu;
 mod textinfo;
 
+pub use cached_image::*;
 pub use home_bar::*;
 pub use hooks::*;
 pub use loading_bar::*;
