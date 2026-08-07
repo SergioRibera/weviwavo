@@ -39,7 +39,10 @@ impl Component for HomeBar {
             .border(
                 Border::new()
                     .alignment(BorderAlignment::Outer)
-                    .width(1.)
+                    .width(BorderWidth {
+                        bottom: 1.,
+                        ..Default::default()
+                    })
                     .fill(Color::from_hex("#292929").unwrap()),
             )
             .maybe_child(on_menu.map(|cb| {

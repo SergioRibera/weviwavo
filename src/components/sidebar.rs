@@ -101,8 +101,11 @@ impl Component for Sidebar {
             .spacing(4.)
             .border(
                 Border::new()
+                    .width(BorderWidth {
+                        right: 1.,
+                        ..Default::default()
+                    })
                     .alignment(BorderAlignment::Outer)
-                    .width(1.)
                     .fill(Color::from_hex("#292929").unwrap()),
             )
             // ── nav buttons ───────────────────────────────────────────────
