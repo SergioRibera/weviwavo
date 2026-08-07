@@ -34,7 +34,8 @@ impl Component for HomeBar {
             .padding(Gaps::new_symmetric(0., 20.))
             .cross_align(Alignment::Center)
             .spacing(16.)
-            .background(Color::from_hex("#0D0D0D").unwrap())
+            .background(Color::TRANSPARENT)
+            .blur(25.)
             .maybe_child(show_back.then_some(
                 rect()
                     .center()

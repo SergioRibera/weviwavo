@@ -87,7 +87,7 @@ impl Component for Home {
             .vertical()
             .expanded()
             .child(HomeBar {
-                on_menu: (!open).then_some(on_open),
+                on_menu: (!open).then_some(on_open).or(Some(on_close)),
                 show_back_btn: false,
             })
             .child(
@@ -97,7 +97,6 @@ impl Component for Home {
                     .height(Size::flex(1.0))
                     .child(Sidebar {
                         width: sidebar_width,
-                        on_close,
                     })
                     .child(
                         ScrollView::new()
