@@ -55,18 +55,11 @@ async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
         None => yt_base,
     };
 
-    let http = reqwest::Client::new();
-    let bearer = resolve_bearer(&http, &mut radio).await;
-
-    let yt = match bearer {
-        Some(ref token) => yt_base.with_bearer_token(token),
-        None => yt_base,
-    };
+    let yt = yt_base;
 
     {
         let mut data = radio.write_channel(DataChannel::YtApi);
         data.yt_session = Some(yt.clone());
-        data.bearer_token = bearer;
         if let Some(h) = cookie_header {
             data.cookie_header = Some(h);
         }
@@ -106,67 +99,6 @@ async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
         }
         Err(e) => {
             tracing::warn!(error = %e, "library playlists unavailable");
-        }
-    }
-}
-
-/// Returns a live access token, either refreshed from disk or obtained via device flow.
-async fn resolve_bearer(
-    http: &reqwest::Client,
-    radio: &mut RadioStation<Data, DataChannel>,
-) -> Option<String> {
-    if let Some(refresh_token) = crate::oauth::load_refresh_token() {
-        match ytdroid::oauth::refresh_access_token(http, &refresh_token).await {
-            Ok(token) => {
-                tracing::info!("OAuth access token refreshed");
-                return Some(token);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "OAuth refresh failed — re-running device flow");
-                crate::oauth::clear_refresh_token();
-            }
-        }
-    }
-
-    start_device_flow(http, radio).await
-}
-
-async fn start_device_flow(
-    http: &reqwest::Client,
-    radio: &mut RadioStation<Data, DataChannel>,
-) -> Option<String> {
-    let device = match ytdroid::oauth::request_device_code(http).await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::error!(error = %e, "OAuth device code request failed");
-            return None;
-        }
-    };
-
-    tracing::info!(
-        user_code = %device.user_code,
-        url = %device.verification_url,
-        "OAuth device flow — waiting for user authorization"
-    );
-
-    radio.write_channel(DataChannel::Auth).oauth_pending =
-        Some((device.user_code.clone(), device.verification_url.clone()));
-
-    let result = ytdroid::oauth::poll_token(http, &device.device_code, device.interval).await;
-
-    radio.write_channel(DataChannel::Auth).oauth_pending = None;
-
-    match result {
-        Ok(token) => {
-            if !token.refresh_token.is_empty() {
-                crate::oauth::save_refresh_token(&token.refresh_token);
-                tracing::info!("OAuth refresh token saved");
-            }
-            Some(token.access_token)
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "OAuth device flow failed");
-            None
         }
     }
 }

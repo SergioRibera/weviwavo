@@ -53,7 +53,6 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
         ]
     } else if hints.is_live {
         vec![
-            YouTubeClient::ANDROID_BEARER,
             YouTubeClient::TVHTML5,
             YouTubeClient::WEB_REMIX,
             YouTubeClient::WEB_CREATOR,
@@ -68,21 +67,16 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
         ]
     } else if hints.is_explicit {
         vec![
-            YouTubeClient::ANDROID_BEARER,
             YouTubeClient::ANDROID_TESTSUITE,
             YouTubeClient::TVHTML5,
             YouTubeClient::WEB_REMIX,
         ]
     } else {
-        // yt-dlp default chain: visionos → android_vr → web.
-        // ANDROID_BEARER first when available (bearer auth, direct URLs, no PoToken needed).
-        // VISIONOS: no GVS PoToken policy — works without PoToken when not bot-detected.
-        // ANDROID_TESTSUITE: very old client, YouTube doesn't enforce PoToken for it.
-        // android_vr/iOS: GVS required per yt-dlp policy, BUT if we send a player PoToken
-        //   (not_required_with_player_token=True) the returned CDN URL skips GVS enforcement.
-        // WEB_REMIX last: always requires GVS PoToken, needs external provider.
+        // VISIONOS: no PoToken policy, works without auth when visitor_id is known.
+        // ANDROID_TESTSUITE: old client, YouTube doesn't enforce PoToken.
+        // android_vr/iOS: GVS required, bypassed when player PoToken was sent.
+        // WEB_REMIX last: always requires GVS PoToken.
         vec![
-            YouTubeClient::ANDROID_BEARER,
             YouTubeClient::VISIONOS,
             YouTubeClient::ANDROID_TESTSUITE,
             YouTubeClient::ANDROID_VR_1_65,
@@ -538,7 +532,7 @@ impl YouTube {
     ) -> Result<PlayerResponse> {
         let raw = self
             .inner
-            .player(&YouTubeClient::ANDROID_BEARER, video_id, playlist_id, None, None)
+            .player(&YouTubeClient::VISIONOS, video_id, playlist_id, None, None)
             .await?;
         Ok(raw)
     }

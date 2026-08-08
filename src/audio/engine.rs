@@ -202,7 +202,6 @@ pub async fn run_audio_engine(
                     if next_idx < queue.len() {
                         let next = queue[next_idx].clone();
                         let cookies = radio.read().cookie_header.clone();
-                        let bearer = radio.read().bearer_token.clone();
                         let vol = radio.read().player.volume;
 
                         info!(
@@ -234,7 +233,6 @@ pub async fn run_audio_engine(
                                 &video_id,
                                 AudioQuality::Medium,
                                 cookies,
-                                bearer,
                             )
                             .await
                             .map_err(|e| e.to_string());
@@ -268,7 +266,6 @@ async fn handle_command(
             thumbnail_url,
         } => {
             let cookies = radio.read().cookie_header.clone();
-            let bearer = radio.read().bearer_token.clone();
             song_done.store(false, Ordering::Relaxed);
 
             {
@@ -288,7 +285,7 @@ async fn handle_command(
 
             let tx = fetch_tx.clone();
             tokio::spawn(async move {
-                let result = fetch_audio_bytes(&video_id, quality, cookies, bearer)
+                let result = fetch_audio_bytes(&video_id, quality, cookies)
                     .await
                     .map_err(|e| e.to_string());
                 tx.send(result).await.ok();
@@ -302,7 +299,6 @@ async fn handle_command(
 
             let song = songs[index].clone();
             let cookies = radio.read().cookie_header.clone();
-            let bearer = radio.read().bearer_token.clone();
             song_done.store(false, Ordering::Relaxed);
 
             {
@@ -322,7 +318,7 @@ async fn handle_command(
             let tx = fetch_tx.clone();
             let video_id = song.video_id.clone();
             tokio::spawn(async move {
-                let result = fetch_audio_bytes(&video_id, quality, cookies, bearer)
+                let result = fetch_audio_bytes(&video_id, quality, cookies)
                     .await
                     .map_err(|e| e.to_string());
                 tx.send(result).await.ok();
@@ -338,7 +334,6 @@ async fn handle_command(
             if next_idx < queue.len() {
                 let song = queue[next_idx].clone();
                 let cookies = radio.read().cookie_header.clone();
-                let bearer = radio.read().bearer_token.clone();
                 song_done.store(false, Ordering::Relaxed);
 
                 {
@@ -358,7 +353,7 @@ async fn handle_command(
                 let video_id = song.video_id.clone();
                 tokio::spawn(async move {
                     let result =
-                        fetch_audio_bytes(&video_id, AudioQuality::Medium, cookies, bearer)
+                        fetch_audio_bytes(&video_id, AudioQuality::Medium, cookies)
                             .await
                             .map_err(|e| e.to_string());
                     tx.send(result).await.ok();
@@ -375,7 +370,6 @@ async fn handle_command(
                 let prev_idx = idx - 1;
                 let song = queue[prev_idx].clone();
                 let cookies = radio.read().cookie_header.clone();
-                let bearer = radio.read().bearer_token.clone();
                 song_done.store(false, Ordering::Relaxed);
 
                 {
@@ -395,7 +389,7 @@ async fn handle_command(
                 let video_id = song.video_id.clone();
                 tokio::spawn(async move {
                     let result =
-                        fetch_audio_bytes(&video_id, AudioQuality::Medium, cookies, bearer)
+                        fetch_audio_bytes(&video_id, AudioQuality::Medium, cookies)
                             .await
                             .map_err(|e| e.to_string());
                     tx.send(result).await.ok();

@@ -23,23 +23,12 @@ pub async fn fetch_audio_bytes(
     video_id: &str,
     quality: AudioQuality,
     cookies: Option<String>,
-    bearer_token: Option<String>,
 ) -> Result<crate::audio::AudioRaw, AudioError> {
-    tracing::debug!(
-        video_id,
-        has_cookies = cookies.is_some(),
-        has_bearer = bearer_token.is_some(),
-        "fetching audio"
-    );
+    tracing::debug!(video_id, has_cookies = cookies.is_some(), "fetching audio");
 
     let yt_base = YouTube::new(cookies.as_deref(), Locale::default())?;
-    // Seed persisted visitor_id so VisionOS and other clients don't get bot-detected.
-    let yt_base = match crate::visitor_id::load() {
+    let yt = match crate::visitor_id::load() {
         Some(vid) => yt_base.with_visitor_id(vid),
-        None => yt_base,
-    };
-    let yt = match bearer_token {
-        Some(ref token) => yt_base.with_bearer_token(token),
         None => yt_base,
     };
 
