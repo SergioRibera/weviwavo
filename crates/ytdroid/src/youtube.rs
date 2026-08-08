@@ -33,8 +33,15 @@ pub struct AudioStream {
     /// When `true`, `data` is a `signatureCipher` that requires sig decryption.
     pub is_cipher: bool,
     /// Streaming PoToken to append as `pot=` to the final CDN URL (WEB clients only).
+    ///
     /// The caller must append this AFTER sig decryption and nsig transform.
+    /// Set by the caller after obtaining `visitor_data` from the player response.
     pub streaming_pot: Option<String>,
+    /// True when the selected client requires a GVS/streaming PoToken.
+    ///
+    /// Callers that can supply a streaming PoToken should check this flag and
+    /// call the PoToken provider, then set [`AudioStream::streaming_pot`].
+    pub needs_gvs_pot: bool,
 }
 
 fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
@@ -67,17 +74,22 @@ fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
             YouTubeClient::WEB_REMIX,
         ]
     } else {
-        // ANDROID_BEARER (id=3 + TV OAuth) first — direct URLs, no cipher, no PoToken.
-        // TV-issued tokens work with clientId=3 (confirmed by yt-dlp) but NOT clientId=21.
+        // yt-dlp default chain: visionos → android_vr → web.
+        // ANDROID_BEARER first when available (bearer auth, direct URLs, no PoToken needed).
+        // VISIONOS: no GVS PoToken policy — works without PoToken when not bot-detected.
+        // ANDROID_TESTSUITE: very old client, YouTube doesn't enforce PoToken for it.
+        // android_vr/iOS: GVS required per yt-dlp policy, BUT if we send a player PoToken
+        //   (not_required_with_player_token=True) the returned CDN URL skips GVS enforcement.
+        // WEB_REMIX last: always requires GVS PoToken, needs external provider.
         vec![
             YouTubeClient::ANDROID_BEARER,
-            YouTubeClient::ANDROID_TESTSUITE,
-            YouTubeClient::WEB_REMIX,
-            YouTubeClient::TVHTML5,
             YouTubeClient::VISIONOS,
+            YouTubeClient::ANDROID_TESTSUITE,
             YouTubeClient::ANDROID_VR_1_65,
             YouTubeClient::ANDROID_VR_1_43,
-            YouTubeClient::TVHTML5_SIMPLY,
+            YouTubeClient::MOBILE,
+            YouTubeClient::IOS,
+            YouTubeClient::WEB_REMIX,
         ]
     }
 }
@@ -126,17 +138,29 @@ impl YouTube {
         })
     }
 
-    /// Set an optional visitor ID (sent as `X-Goog-Visitor-Id`).
+    /// Seed the visitor ID (sent as `X-Goog-Visitor-Id`).
+    ///
+    /// This is a first-write-wins operation: once a value is set (either here
+    /// or auto-captured from an API response header) it cannot be overwritten.
     #[must_use]
-    pub fn with_visitor_id(mut self, visitor_id: impl Into<String>) -> Self {
-        self.inner.visitor_id = Some(visitor_id.into());
+    pub fn with_visitor_id(self, visitor_id: impl Into<String>) -> Self {
+        self.inner.set_visitor_id(visitor_id.into());
         self
     }
 
-    /// The visitor/session ID set via [`with_visitor_id`], if any.
+    /// The current visitor/session ID, if any.
+    ///
+    /// Populated from a seed value (via [`with_visitor_id`]) or automatically
+    /// captured from the `X-Goog-Visitor-Id` response header on the first API call.
     #[must_use]
-    pub fn visitor_id(&self) -> Option<&str> {
-        self.inner.visitor_id.as_deref()
+    pub fn visitor_id(&self) -> Option<String> {
+        self.inner.visitor_data()
+    }
+
+    /// Alias for [`visitor_id`] using the Innertube field name.
+    #[must_use]
+    pub fn visitor_data(&self) -> Option<String> {
+        self.inner.visitor_data()
     }
 
     /// Attach an OAuth2 Bearer token for Android/iOS client requests.
@@ -580,7 +604,10 @@ impl YouTube {
                 continue;
             }
 
-            let client_pot = if client.use_web_po_tokens { po_token } else { None };
+            // Send player PoToken to ALL clients that accept it, not just WEB.
+            // For android/VR/iOS: if we include a player token, YouTube returns CDN URLs
+            // that don't require a GVS streaming token (not_required_with_player_token=True).
+            let client_pot = po_token;
             let client_sig_ts = if client.use_signature_timestamp { sig_ts } else { None };
 
             match self.inner.player(client, video_id, None, client_sig_ts, client_pot).await {
@@ -606,6 +633,19 @@ impl YouTube {
                     let cipher = sd.map(|s| s.adaptive_formats.iter().filter(|f| f.is_audio_only() && f.signature_cipher.is_some()).count()).unwrap_or(0);
                     tracing::debug!(client = client.client_name, audio_only, direct, cipher, "player OK");
 
+                    // Whether a GVS/streaming PoToken is needed for the CDN URL.
+                    // WEB clients: always need GVS (not_required_with_player_token=False in yt-dlp).
+                    // App clients (VR/iOS/Android): need GVS unless we sent a player PoToken
+                    //   (not_required_with_player_token=True) — in that case YouTube returns
+                    //   CDN URLs that skip enforcement.
+                    // VisionOS / ANDROID_TESTSUITE: no GVS policy, no streaming PoToken needed.
+                    let has_gvs_requirement = matches!(
+                        client.client_name,
+                        "ANDROID_VR" | "IOS" | "ANDROID" | "ANDROID_MUSIC"
+                    );
+                    let needs_gvs = client.use_web_po_tokens
+                        || (has_gvs_requirement && client_pot.is_none());
+
                     // Prefer direct URL (no sig/nsig needed — VISIONOS/VR path).
                     if let Some(fmt) = sd.and_then(|s| s.best_audio_format()) {
                         tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, mime = fmt.mime_type.as_deref().unwrap_or("?"), "direct audio format");
@@ -613,7 +653,12 @@ impl YouTube {
                             video_id: video_id.to_owned(),
                         })?;
                         let spot = client.use_web_po_tokens.then(|| streaming_pot).flatten().map(str::to_owned);
-                        return Ok(AudioStream { data: url, is_cipher: false, streaming_pot: spot });
+                        return Ok(AudioStream {
+                            data: url,
+                            is_cipher: false,
+                            streaming_pot: spot,
+                            needs_gvs_pot: needs_gvs,
+                        });
                     }
 
                     // Cipher URL (WEB clients — sig decryption + nsig needed by caller).
@@ -623,7 +668,12 @@ impl YouTube {
                             video_id: video_id.to_owned(),
                         })?;
                         let spot = client.use_web_po_tokens.then(|| streaming_pot).flatten().map(str::to_owned);
-                        return Ok(AudioStream { data: cipher_str, is_cipher: true, streaming_pot: spot });
+                        return Ok(AudioStream {
+                            data: cipher_str,
+                            is_cipher: true,
+                            streaming_pot: spot,
+                            needs_gvs_pot: needs_gvs,
+                        });
                     }
 
                     last_err = Error::NoAudioFormat { video_id: video_id.to_owned() };

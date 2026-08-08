@@ -44,6 +44,17 @@ async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
         return;
     };
 
+    // Seed a persisted visitor_id so YouTube doesn't bot-detect our first request.
+    // yt-dlp always sends X-Goog-Visitor-Id on every request (from ytcfg page fetch).
+    // We skip the page fetch but persist and reload the token across sessions.
+    let yt_base = match crate::visitor_id::load() {
+        Some(vid) => {
+            tracing::debug!("seeding visitor_id from disk");
+            yt_base.with_visitor_id(vid)
+        }
+        None => yt_base,
+    };
+
     let http = reqwest::Client::new();
     let bearer = resolve_bearer(&http, &mut radio).await;
 
@@ -73,6 +84,12 @@ async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
         Err(e) => {
             tracing::error!(error = %e, "failed to fetch home feed");
         }
+    }
+
+    // Persist visitor_id after the first successful API call (home feed captures it).
+    if let Some(vid) = yt.visitor_id() {
+        crate::visitor_id::save(&vid);
+        tracing::debug!("visitor_id persisted to disk");
     }
 
     match yt.library(browse_id::LIBRARY_PLAYLISTS, None).await {

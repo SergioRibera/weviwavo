@@ -24,44 +24,65 @@ pub async fn fetch_audio_bytes(
     quality: AudioQuality,
     cookies: Option<String>,
     bearer_token: Option<String>,
-) -> Result<Vec<u8>, AudioError> {
-    tracing::debug!(video_id, has_cookies = cookies.is_some(), has_bearer = bearer_token.is_some(), "fetching audio");
+) -> Result<crate::audio::AudioRaw, AudioError> {
+    tracing::debug!(
+        video_id,
+        has_cookies = cookies.is_some(),
+        has_bearer = bearer_token.is_some(),
+        "fetching audio"
+    );
 
     let yt_base = YouTube::new(cookies.as_deref(), Locale::default())?;
+    // Seed persisted visitor_id so VisionOS and other clients don't get bot-detected.
+    let yt_base = match crate::visitor_id::load() {
+        Some(vid) => yt_base.with_visitor_id(vid),
+        None => yt_base,
+    };
     let yt = match bearer_token {
         Some(ref token) => yt_base.with_bearer_token(token),
         None => yt_base,
     };
 
-    // Generate PoToken for WEB clients — non-fatal on failure.
-    // VISIONOS/VR clients succeed without it; WEB_REMIX uses it if available.
-    let (po_player, po_streaming) = match servo_webview::potoken::generate(
-        yt.visitor_id().unwrap_or(video_id),
-        video_id,
-    )
-    .await
-    {
-        Ok(tok) => {
-            tracing::debug!("PoToken generated");
-            (Some(tok.player), Some(tok.streaming))
-        }
-        Err(e) => {
-            tracing::warn!("PoToken generation failed ({e}), WEB clients will lack token");
-            (None, None)
-        }
-    };
+    // Generate the player PoToken upfront (content-bound to video_id).
+    // Non-fatal: VisionOS/VR clients succeed without it.
+    let po_player = servo_webview::potoken::generate(video_id, video_id)
+        .await
+        .ok()
+        .map(|p| p.player);
+
+    if po_player.is_some() {
+        tracing::debug!("player PoToken generated");
+    }
 
     let sig_ts = super::nsig::signature_timestamp().await;
 
-    let stream = yt
+    // First pass: get the stream. streaming_pot is None here — we fill it
+    // below after the player request has captured visitor_data from response headers.
+    let mut stream = yt
         .audio_stream(
             video_id,
             &ContentHints::default(),
             po_player.as_deref(),
-            po_streaming.as_deref(),
+            None,
             Some(sig_ts),
         )
         .await?;
+
+    // If the selected client requires a GVS PoToken (WEB clients), generate it
+    // now. visitor_data is available because the /player request above captured
+    // it from the X-Goog-Visitor-Id response header.
+    if stream.needs_gvs_pot {
+        let visitor_data = yt.visitor_data().unwrap_or_else(|| video_id.to_owned());
+        match servo_webview::potoken::generate(&visitor_data, video_id).await {
+            Ok(pair) => {
+                tracing::debug!("streaming PoToken generated");
+                stream.streaming_pot = Some(pair.streaming);
+            }
+            Err(e) => {
+                tracing::warn!("streaming PoToken failed ({e}), stream may 403");
+            }
+        }
+    }
 
     let url = resolve_stream(stream).await?;
     tracing::debug!(%url, "fetching stream bytes");
@@ -93,10 +114,26 @@ pub async fn fetch_audio_bytes(
     }
     tracing::debug!(%status, content_type, "stream response headers");
 
-    let bytes = resp.bytes().await.map_err(AudioError::Http)?;
-    tracing::debug!(bytes = bytes.len(), "audio fetched");
+    let content_length = resp.content_length();
+    let (reader, writer) = crate::audio::streaming::progressive_channel(content_length);
+
+    tokio::spawn(async move {
+        let mut resp = resp;
+        loop {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => writer.push(&chunk),
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::warn!(error = %e, "stream chunk error");
+                    break;
+                }
+            }
+        }
+        writer.finish();
+    });
+
     let _ = quality;
-    Ok(bytes.to_vec())
+    Ok(Box::new(reader))
 }
 
 /// Resolve an [`AudioStream`] to a final CDN URL.

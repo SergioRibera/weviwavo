@@ -4,6 +4,7 @@
 //! higher-level [`crate::YouTube`] API unless they need raw JSON access.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
@@ -25,8 +26,11 @@ pub struct InnerTube {
     http: Client,
     locale: Locale,
     cookies: HashMap<String, String>,
-    /// Visitor ID sent as `X-Goog-Visitor-Id` (optional).
-    pub visitor_id: Option<String>,
+    /// Visitor ID sent/received as `X-Goog-Visitor-Id`.
+    ///
+    /// Shared across clones so that a response-captured value is immediately
+    /// visible to all holders (first-write-wins via [`OnceLock`]).
+    visitor_id: Arc<OnceLock<String>>,
     /// OAuth2 Bearer token for Android/iOS clients (set via [`YouTube::with_bearer_token`]).
     pub bearer_token: Option<String>,
 }
@@ -53,7 +57,7 @@ impl InnerTube {
             http,
             locale,
             cookies,
-            visitor_id: None,
+            visitor_id: Arc::new(OnceLock::new()),
             bearer_token: None,
         })
     }
@@ -66,6 +70,19 @@ impl InnerTube {
             || self.cookies.contains_key("__Secure-3PAPISID")
     }
 
+    /// Returns the visitor ID captured from response headers, if any.
+    #[must_use]
+    pub fn visitor_data(&self) -> Option<String> {
+        self.visitor_id.get().cloned()
+    }
+
+    /// Seed the visitor ID (e.g. from a previously stored value).
+    ///
+    /// Silently ignored if a value was already set (first-write-wins).
+    pub(crate) fn set_visitor_id(&self, vid: String) {
+        self.visitor_id.set(vid).ok();
+    }
+
     // ── Internal helpers ─────────────────────────────────────────────────────
 
     fn build_context(&self, client: &YouTubeClient) -> Value {
@@ -76,7 +93,7 @@ impl InnerTube {
             "hl": self.locale.hl,
         });
         let obj = ctx.as_object_mut().unwrap();
-        if let Some(vid) = &self.visitor_id {
+        if let Some(vid) = self.visitor_id.get() {
             obj.insert("visitorData".into(), json!(vid));
         }
         if client.include_user_agent_in_context {
@@ -100,11 +117,10 @@ impl InnerTube {
                 obj.insert("androidSdkVersion".into(), json!(n));
             }
         }
-        // Bearer-auth (Android) clients: minimal context matching yt-dlp's android_music shape.
-        // Web clients: full context with request/user subobjects (Metrolist Context.kt defaults).
-        let mut out = if client.use_bearer_auth {
-            json!({ "client": ctx })
-        } else {
+        // WEB-family clients (use_web_po_tokens=true): full context with request/user.
+        // App/mobile clients (bearer, VR, iOS, VisionOS, ANDROID): minimal — just client.
+        // Metrolist confirms ANDROID player body has no request/user sections.
+        let mut out = if client.use_web_po_tokens {
             json!({
                 "client": ctx,
                 "request": {
@@ -115,6 +131,8 @@ impl InnerTube {
                     "lockedSafetyMode": false
                 }
             })
+        } else {
+            json!({ "client": ctx })
         };
         if client.is_embedded {
             out.as_object_mut().unwrap().insert(
@@ -140,9 +158,15 @@ impl InnerTube {
         body: Value,
     ) -> Result<Value> {
         let base = client.api_base.unwrap_or(MUSIC_API_BASE);
-        let url = match client.api_key {
-            Some(key) => format!("{base}{endpoint}?key={key}&prettyPrint=false"),
-            None => format!("{base}{endpoint}?prettyPrint=false"),
+        // When using Bearer auth, omit the API key — Google rejects key+Bearer combinations.
+        let has_active_bearer = client.use_bearer_auth && self.bearer_token.is_some();
+        let url = if has_active_bearer {
+            format!("{base}{endpoint}?prettyPrint=false")
+        } else {
+            match client.api_key {
+                Some(key) => format!("{base}{endpoint}?key={key}&prettyPrint=false"),
+                None => format!("{base}{endpoint}?prettyPrint=false"),
+            }
         };
         if client.use_bearer_auth {
             debug!(
@@ -164,19 +188,30 @@ impl InnerTube {
             .header("X-YouTube-Client-Version", client.client_version)
             .header("User-Agent", client.user_agent);
 
+        // yt-dlp always sends Origin matching the API host. Required to avoid bot detection.
+        let api_origin = if client.api_base.is_none() {
+            MUSIC_ORIGIN
+        } else {
+            "https://www.youtube.com"
+        };
+        req = req.header("Origin", api_origin);
+
         if client.use_bearer_auth {
-            // Android/iOS OAuth2 path.
-            // X-Goog-Api-Format-Version / X-Origin / Referer are web-only headers;
-            // sending them with Bearer causes INVALID_ARGUMENT 400.
+            // OAuth2 Bearer path — Authorization + X-Goog-AuthUser (yt-dlp includes this for all auth).
             if let Some(token) = &self.bearer_token {
-                req = req.header("Authorization", format!("Bearer {token}"));
+                req = req
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("X-Goog-AuthUser", "0");
             }
         } else {
-            // WEB-family path: browser-origin headers required by music.youtube.com.
-            req = req
-                .header("X-Goog-Api-Format-Version", "1")
-                .header("X-Origin", MUSIC_ORIGIN)
-                .header("Referer", MUSIC_REFERER);
+            // Music API clients (api_base=None → music.youtube.com): extra music-specific headers.
+            let is_music_api = client.api_base.is_none();
+            if is_music_api {
+                req = req
+                    .header("X-Goog-Api-Format-Version", "1")
+                    .header("X-Origin", MUSIC_ORIGIN)
+                    .header("Referer", MUSIC_REFERER);
+            }
             if client.login_supported && !cookie_str.is_empty() {
                 req = req.header("Cookie", &cookie_str);
                 if let Some(auth) = sapisidhash(&self.cookies) {
@@ -184,7 +219,7 @@ impl InnerTube {
                 }
             }
         }
-        if let Some(vid) = &self.visitor_id {
+        if let Some(vid) = self.visitor_id.get() {
             req = req.header("X-Goog-Visitor-Id", vid);
         }
 
@@ -197,7 +232,24 @@ impl InnerTube {
             warn!(endpoint, client = client.client_name, %status, body = %body, "API non-success");
             return Err(Error::HttpStatus { status: status.as_u16() });
         }
+        // Capture visitor ID from response header (set before consuming body).
+        if let Some(v) = resp
+            .headers()
+            .get("X-Goog-Visitor-Id")
+            .and_then(|h| h.to_str().ok())
+            .filter(|s| !s.is_empty())
+        {
+            self.visitor_id.set(v.to_owned()).ok();
+        }
         let value = resp.json::<Value>().await.map_err(Error::from)?;
+        // Also capture from responseContext.visitorData in body (yt-dlp does this too).
+        if let Some(vd) = value
+            .pointer("/responseContext/visitorData")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            self.visitor_id.set(vd.to_owned()).ok();
+        }
         Ok(value)
     }
 
@@ -317,7 +369,10 @@ impl InnerTube {
                 }
             });
         }
-        if let Some(token) = po_token.filter(|_| client.use_web_po_tokens) {
+        // Player PoToken goes to ALL clients that support it (not just WEB).
+        // android, android_vr, ios all have PLAYER_PO_TOKEN_POLICY in yt-dlp.
+        // With a player token, GVS streaming token is not required (not_required_with_player_token=true).
+        if let Some(token) = po_token {
             extra["serviceIntegrityDimensions"] = json!({ "poToken": token });
         }
         let raw = self.post_raw("player", client, self.body(client, &extra)).await?;

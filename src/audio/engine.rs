@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -10,7 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::app::{Data, DataChannel, QueueSong};
-use crate::audio::{AudioQuality, youtube::fetch_audio_bytes};
+use crate::audio::{AudioQuality, AudioRaw, youtube::fetch_audio_bytes};
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -39,7 +38,7 @@ pub enum AudioCommand {
 }
 
 enum RodioCmd {
-    Play(Vec<u8>, Arc<AtomicBool>),
+    Play(AudioRaw, Arc<AtomicBool>),
     Pause,
     Resume,
     Stop,
@@ -138,7 +137,7 @@ pub async fn run_audio_engine(
     mut radio: RadioStation<Data, DataChannel>,
 ) {
     let (rodio_tx, rodio_rx) = std::sync::mpsc::channel::<RodioCmd>();
-    let (fetch_tx, mut fetch_rx) = mpsc::channel::<Result<Vec<u8>, String>>(4);
+    let (fetch_tx, mut fetch_rx) = mpsc::channel::<Result<AudioRaw, String>>(4);
 
     let progress = Arc::new(Mutex::new(ProgressState::default()));
     let progress_for_rodio = Arc::clone(&progress);
@@ -164,9 +163,11 @@ pub async fn run_audio_engine(
             }
             Some(result) = fetch_rx.recv() => {
                 match result {
-                    Ok(bytes) => {
+                    Ok(reader) => {
                         song_done.store(false, Ordering::Relaxed);
-                        rodio_tx.send(RodioCmd::Play(bytes, Arc::clone(&song_done))).ok();
+                        if let Err(e) = rodio_tx.send(RodioCmd::Play(reader, Arc::clone(&song_done))) {
+                            error!(error = %e, "rodio channel dead — thread may have panicked");
+                        }
                     }
                     Err(e) => {
                         error!(error = %e, "failed to fetch audio");
@@ -254,7 +255,7 @@ async fn handle_command(
     cmd: AudioCommand,
     rodio_tx: &std::sync::mpsc::Sender<RodioCmd>,
     radio: &mut RadioStation<Data, DataChannel>,
-    fetch_tx: &mpsc::Sender<Result<Vec<u8>, String>>,
+    fetch_tx: &mpsc::Sender<Result<AudioRaw, String>>,
     song_done: &Arc<AtomicBool>,
 ) {
     match cmd {
@@ -435,6 +436,7 @@ fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<Pro
     let sink_handle: rodio::MixerDeviceSink = match rodio::DeviceSinkBuilder::open_default_sink() {
         Ok(mut h) => {
             h.log_on_drop(false);
+            info!("audio device opened");
             h
         }
         Err(e) => {
@@ -446,10 +448,9 @@ fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<Pro
 
     while let Ok(cmd) = rx.recv() {
         match cmd {
-            RodioCmd::Play(bytes, done_flag) => {
+            RodioCmd::Play(reader, done_flag) => {
                 player.clear();
-                let cursor = Cursor::new(bytes);
-                match Decoder::new(cursor) {
+                match Decoder::new(reader) {
                     Ok(source) => {
                         let maybe_total = source.total_duration();
                         let total = maybe_total.map(|d| d.as_secs_f32()).unwrap_or(0.);

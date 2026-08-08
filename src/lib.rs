@@ -16,6 +16,7 @@ mod oauth;
 mod prefs;
 mod startup;
 mod utils;
+mod visitor_id;
 
 pub const APP_NAME: &str = env!("CARGO_CRATE_NAME");
 

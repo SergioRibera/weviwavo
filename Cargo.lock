@@ -9039,7 +9039,10 @@ name = "servo-webview"
 version = "0.1.0"
 dependencies = [
  "euclid",
+ "reqwest",
  "rustls",
+ "serde",
+ "serde_json",
  "servo",
  "thiserror 2.0.18",
  "tokio",

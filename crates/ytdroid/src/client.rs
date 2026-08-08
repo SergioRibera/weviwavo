@@ -58,7 +58,7 @@ impl YouTubeClient {
     /// Primary client for all browse / search / library calls.
     pub const WEB_REMIX: Self = Self {
         client_name: "WEB_REMIX",
-        client_version: "1.20260114.03.00",
+        client_version: "1.20260707.12.00",
         client_id: "67",
         user_agent: UA_WEB,
         context_extra: ContextExtra {
@@ -142,15 +142,15 @@ impl YouTubeClient {
     /// Android YouTube client — login-capable (SAPISIDHASH + cookies), matching Metrolist's MOBILE.
     pub const MOBILE: Self = Self {
         client_name: "ANDROID",
-        client_version: "21.03.38",
+        client_version: "21.26.364",
         client_id: "3",
-        user_agent: "com.google.android.youtube/21.03.38 (Linux; U; Android 14) gzip",
+        user_agent: "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip",
         context_extra: ContextExtra {
-            os_name: None,
-            os_version: None,
+            os_name: Some("Android"),
+            os_version: Some("11"),
             device_make: None,
             device_model: None,
-            android_sdk_version: None,
+            android_sdk_version: Some("30"),
             build_id: None,
             cronet_version: None,
             package_name: None,
@@ -160,7 +160,7 @@ impl YouTubeClient {
         use_signature_timestamp: false,
         use_web_po_tokens: false,
         require_po_token: false,
-        include_user_agent_in_context: false,
+        include_user_agent_in_context: true,
         is_embedded: false,
         use_bearer_auth: false,
         api_base: None,
@@ -172,13 +172,13 @@ impl YouTubeClient {
     /// because YouTube Music rejects TV-issued tokens for client_id=21.
     pub const ANDROID_BEARER: Self = Self {
         client_name: "ANDROID",
-        client_version: "21.03.38",
+        client_version: "21.26.364",
         client_id: "3",
-        user_agent: "com.google.android.youtube/21.03.38 (Linux; U; Android 14) gzip",
+        user_agent: "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip",
         context_extra: ContextExtra {
             os_name: Some("Android"),
-            os_version: Some("14"),
-            android_sdk_version: Some("34"),
+            os_version: Some("11"),
+            android_sdk_version: Some("30"),
             build_id: None,
             cronet_version: None,
             device_make: None,
@@ -197,7 +197,7 @@ impl YouTubeClient {
         api_key: Some(YT_API_KEY),
     };
 
-    /// Android VR — no SAPISIDHASH, cookie-only auth.
+    /// Android VR — no auth, hits www.youtube.com (not music.youtube.com).
     pub const ANDROID_VR_NO_AUTH: Self = Self {
         client_name: "ANDROID_VR",
         client_version: "1.61.48",
@@ -221,11 +221,11 @@ impl YouTubeClient {
         include_user_agent_in_context: true,
         is_embedded: false,
         use_bearer_auth: false,
-        api_base: None,
+        api_base: Some(YT_API_BASE),
         api_key: None,
     };
 
-    /// Android VR 1.65.10 — cookie-only auth, non-adaptive bitrate available.
+    /// Android VR 1.65.10 — no auth, www.youtube.com (yt-dlp default android_vr).
     pub const ANDROID_VR_1_65: Self = Self {
         client_name: "ANDROID_VR",
         client_version: "1.65.10",
@@ -249,11 +249,11 @@ impl YouTubeClient {
         include_user_agent_in_context: true,
         is_embedded: false,
         use_bearer_auth: false,
-        api_base: None,
+        api_base: Some(YT_API_BASE),
         api_key: None,
     };
 
-    /// Android VR 1.43.32 — cookie-only auth, non-adaptive bitrate (fixes audio stuttering on YTM).
+    /// Android VR 1.43.32 — no auth, www.youtube.com.
     pub const ANDROID_VR_1_43: Self = Self {
         client_name: "ANDROID_VR",
         client_version: "1.43.32",
@@ -277,21 +277,22 @@ impl YouTubeClient {
         include_user_agent_in_context: true,
         is_embedded: false,
         use_bearer_auth: false,
-        api_base: None,
+        api_base: Some(YT_API_BASE),
         api_key: None,
     };
 
-    /// VisionOS — cookie-only auth. May stop working at any time.
+    /// VisionOS — no GVS PoToken required (policy default = not required).
+    /// yt-dlp uses this as the #1 default client precisely because it works without any PoToken.
     pub const VISIONOS: Self = Self {
         client_name: "VISIONOS",
-        client_version: "0.1",
+        client_version: "1.02",
         client_id: "101",
-        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15",
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
         context_extra: ContextExtra {
             os_name: Some("visionOS"),
-            os_version: Some("1.3.21O771"),
+            os_version: Some("26.5.23O471"),
             device_make: Some("Apple"),
-            device_model: Some("RealityDevice14,1"),
+            device_model: Some("RealityDevice17,1"),
             android_sdk_version: None,
             build_id: None,
             cronet_version: None,
@@ -302,10 +303,10 @@ impl YouTubeClient {
         use_signature_timestamp: false,
         use_web_po_tokens: false,
         require_po_token: false,
-        include_user_agent_in_context: false,
+        include_user_agent_in_context: true,
         is_embedded: false,
         use_bearer_auth: false,
-        api_base: None,
+        api_base: Some(YT_API_BASE),
         api_key: None,
     };
 
@@ -448,19 +449,19 @@ impl YouTubeClient {
         include_user_agent_in_context: true,
         is_embedded: false,
         use_bearer_auth: false,
-        api_base: None,
+        api_base: Some(YT_API_BASE),
         api_key: None,
     };
 
-    /// iOS YouTube app — cookie-only auth, direct stream URLs, no PoToken required.
+    /// iOS YouTube app — no auth, www.youtube.com, direct stream URLs.
     pub const IOS: Self = Self {
         client_name: "IOS",
-        client_version: "19.45.4",
+        client_version: "21.26.4",
         client_id: "5",
-        user_agent: "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)",
+        user_agent: "com.google.ios.youtube/21.26.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
         context_extra: ContextExtra {
-            os_name: Some("iOS"),
-            os_version: Some("18.1.0.22B83"),
+            os_name: Some("iPhone"),
+            os_version: Some("18.3.2.22D82"),
             device_make: Some("Apple"),
             device_model: Some("iPhone16,2"),
             android_sdk_version: None,
@@ -476,7 +477,7 @@ impl YouTubeClient {
         include_user_agent_in_context: true,
         is_embedded: false,
         use_bearer_auth: false,
-        api_base: None,
+        api_base: Some(YT_API_BASE),
         api_key: None,
     };
 
