@@ -6,7 +6,7 @@ use freya::router::RouterContext;
 use ytdroid::models::YTItem;
 
 use super::{TextInfo, use_cached_thumbnail};
-use crate::app::{Data, DataChannel, NavCommand, Route};
+use crate::app::{Data, DataChannel, NavCommand};
 use crate::audio::{AudioCommand, AudioQuality};
 
 #[derive(Clone, PartialEq)]
@@ -33,17 +33,24 @@ impl SongInfo {
             return rect().into_element();
         }
 
-        let mut all_elements = self.left.get_inline_elements(on_click.clone());
+        let mut spans = self.left.get_inline_elements(on_click.clone());
 
         if let Some(details) = &self.details {
-            all_elements.extend(details.get_inline_elements(on_click));
+            if !spans.is_empty() {
+                spans.push(Span::new(" • "));
+            }
+            spans.extend(details.get_inline_elements(on_click));
+        }
+
+        if spans.is_empty() {
+            return rect().into_element();
         }
 
         paragraph()
             .max_lines(2)
             .text_overflow(TextOverflow::Ellipsis)
             .text_align(TextAlign::Left)
-            .spans_iter(all_elements.into_iter())
+            .spans_iter(spans.into_iter())
             .into_element()
     }
 }
@@ -60,7 +67,11 @@ impl<'a> From<&'a YTItem> for SongInfo {
                 Self {
                     id: v.id.clone(),
                     title: v.title.clone(),
-                    artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artist: v
+                        .artists
+                        .first()
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default(),
                     album: String::new(),
                     left,
                     details: v.year.as_ref().map(|y| TextInfo::plain(y.clone(), None)),
@@ -126,7 +137,11 @@ impl<'a> From<&'a YTItem> for SongInfo {
                 Self {
                     id: v.id.clone(),
                     title: v.title.clone(),
-                    artist: v.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                    artist: v
+                        .artists
+                        .first()
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default(),
                     album: v.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
                     left,
                     details,
@@ -157,7 +172,11 @@ impl<'a> From<&'a YTItem> for SongInfo {
             YTItem::Episode(v) => Self {
                 id: v.id.clone(),
                 title: v.title.clone(),
-                artist: v.podcast.as_ref().map(|p| p.name.clone()).unwrap_or_default(),
+                artist: v
+                    .podcast
+                    .as_ref()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_default(),
                 album: String::new(),
                 left: v
                     .podcast
@@ -366,7 +385,7 @@ impl Component for SongInfo {
                                         ),
                                 ),
                             )
-                    }))
+                    })),
             )
             .child(
                 rect()
@@ -388,9 +407,7 @@ impl Component for SongInfo {
                     .child(
                         rect()
                             .width(Size::Fill)
-                            .font_weight(FontWeight::NORMAL)
                             .color(Color::from_hex("#B3B3B3").unwrap())
-                            .overflow(Overflow::Clip)
                             .child(self.render_info(|id| {
                                 tracing::debug!(id, "content item clicked");
                             })),
