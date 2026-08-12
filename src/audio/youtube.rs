@@ -80,6 +80,9 @@ pub async fn fetch_audio_bytes(
     let yt_report = yt.clone();
     let vid_report = video_id.to_owned();
     tokio::spawn(async move {
+        if let Err(e) = yt_report.fetch_session_token().await {
+            tracing::warn!(error = %e, "session token fetch failed");
+        }
         if let Err(e) = yt_report.report_playback(&vid_report, duration_secs).await {
             tracing::warn!(error = %e, "watchtime report failed");
         }

@@ -1025,6 +1025,16 @@ impl YouTube {
     /// # Errors
     ///
     /// Propagates HTTP errors.
+    /// Fetch `music.youtube.com` HTML to capture the `SESSION_TOKEN` (cached globally).
+    /// Call once before `report_playback` for history tracking to work.
+    ///
+    /// # Errors
+    ///
+    /// Propagates HTTP errors.
+    pub async fn fetch_session_token(&self) -> Result<Option<String>> {
+        self.inner.fetch_session_token().await
+    }
+
     pub async fn report_playback(&self, video_id: &str, duration_secs: u32) -> Result<()> {
         self.inner.report_playback(video_id, duration_secs).await
     }
