@@ -735,11 +735,7 @@ impl YouTube {
                 None,
             )
             .await?;
-        let result = NextPage::from_next_response(&raw);
-        if result.is_err() {
-            tracing::debug!(raw = ?raw, "next parse failed — raw response");
-        }
-        result
+        NextPage::from_next_response(&raw)
     }
 
     /// Continue an up-next queue.
