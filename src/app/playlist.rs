@@ -194,7 +194,8 @@ fn render_content(
                         .children(
                             suggestions
                                 .iter()
-                                .map(|s| PlaylistSongRow::suggestion(s.clone()))
+                                .enumerate()
+                                .map(|(i, s)| PlaylistSongRow::suggestion(s.clone(), i))
                                 .map(IntoElement::into_element),
                         ),
                 ))

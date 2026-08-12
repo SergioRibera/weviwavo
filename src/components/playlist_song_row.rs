@@ -18,8 +18,8 @@ fn fmt_duration(secs: u32) -> String {
 #[derive(Clone, PartialEq)]
 pub struct PlaylistSongRow {
     pub song: SongItem,
-    /// When true, the row belongs to the Suggestions section. On press,
-    /// a single-song `Play` is sent instead of `PlayFromQueue`.
+    /// When true, the row belongs to the Suggestions section — queue is built
+    /// from `playlist_view.suggestions` instead of `playlist_view.songs`.
     pub is_suggestion: bool,
     /// Index of this song in the current playlist queue (ignored for suggestions).
     pub queue_index: usize,
@@ -32,8 +32,8 @@ impl PlaylistSongRow {
     }
 
     #[must_use]
-    pub fn suggestion(song: SongItem) -> Self {
-        Self { song, is_suggestion: true, queue_index: 0 }
+    pub fn suggestion(song: SongItem, index: usize) -> Self {
+        Self { song, is_suggestion: true, queue_index: index }
     }
 }
 
@@ -53,27 +53,31 @@ impl Component for PlaylistSongRow {
         // ── data extraction ───────────────────────────────────────────────────
         let audio_cmd = audio_radio.read().audio_cmd.clone();
 
-        let playlist_songs: Vec<QueueSong> = if !self.is_suggestion {
+        let songs_source = if self.is_suggestion {
             nav_radio
                 .read()
                 .playlist_view
                 .as_ref()
-                .map(|pv| {
-                    pv.songs
-                        .iter()
-                        .map(|s| QueueSong {
-                            video_id: s.id.clone(),
-                            title: s.title.clone(),
-                            artist: s.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
-                            album: s.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
-                            thumbnail_url: s.thumbnail.clone().unwrap_or_default(),
-                        })
-                        .collect()
-                })
+                .map(|pv| pv.suggestions.clone())
                 .unwrap_or_default()
         } else {
-            Vec::new()
+            nav_radio
+                .read()
+                .playlist_view
+                .as_ref()
+                .map(|pv| pv.songs.clone())
+                .unwrap_or_default()
         };
+        let playlist_songs: Vec<QueueSong> = songs_source
+            .iter()
+            .map(|s| QueueSong {
+                video_id: s.id.clone(),
+                title: s.title.clone(),
+                artist: s.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                album: s.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+                thumbnail_url: s.thumbnail.clone().unwrap_or_default(),
+            })
+            .collect();
 
         let video_id = self.song.id.clone();
         let title = self.song.title.clone();
@@ -144,7 +148,7 @@ impl Component for PlaylistSongRow {
                     })
                     .on_press(move |_| {
                         let Some(tx) = audio_cmd.clone() else { return };
-                        if is_suggestion || playlist_songs.is_empty() {
+                        if playlist_songs.is_empty() {
                             tx.try_send(AudioCommand::Play {
                                 video_id: video_id.clone(),
                                 quality: AudioQuality::Medium,
