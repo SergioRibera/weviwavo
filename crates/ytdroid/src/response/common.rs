@@ -174,12 +174,36 @@ pub const VIDEO_TYPE_EPISODE: &str = "MUSIC_VIDEO_TYPE_EPISODE";
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct WatchEndpointMusicConfig {
+    pub music_video_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchEndpointMusicSupportedConfigs {
+    pub watch_endpoint_music_config: Option<WatchEndpointMusicConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct WatchEndpoint {
     pub video_id: Option<String>,
     pub playlist_id: Option<String>,
     pub params: Option<String>,
     pub playlist_set_video_id: Option<String>,
-    pub music_video_type: Option<String>,
+    pub watch_endpoint_music_supported_configs: Option<WatchEndpointMusicSupportedConfigs>,
+}
+
+impl WatchEndpoint {
+    #[must_use]
+    pub fn music_video_type(&self) -> Option<&str> {
+        self.watch_endpoint_music_supported_configs
+            .as_ref()?
+            .watch_endpoint_music_config
+            .as_ref()?
+            .music_video_type
+            .as_deref()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -714,12 +738,8 @@ impl MusicTwoRowItemRenderer {
         self.navigation_endpoint
             .watch_endpoint
             .as_ref()
-            .and_then(|e| e.music_video_type.as_deref())
-            .or_else(|| {
-                self.play_watch_endpoint()?
-                    .music_video_type
-                    .as_deref()
-            })
+            .and_then(WatchEndpoint::music_video_type)
+            .or_else(|| self.play_watch_endpoint()?.music_video_type())
     }
 }
 
@@ -920,8 +940,7 @@ impl MusicResponsiveListItemRenderer {
                     .as_ref()?
                     .watch_endpoint
                     .as_ref()?
-                    .music_video_type
-                    .as_deref()
+                    .music_video_type()
             })
             .or_else(|| {
                 self.flex_columns
@@ -933,14 +952,9 @@ impl MusicResponsiveListItemRenderer {
                     .as_ref()?
                     .watch_endpoint
                     .as_ref()?
-                    .music_video_type
-                    .as_deref()
+                    .music_video_type()
             })
-            .or_else(|| {
-                self.play_watch_endpoint()?
-                    .music_video_type
-                    .as_deref()
-            })
+            .or_else(|| self.play_watch_endpoint()?.music_video_type())
     }
 
     /// Overlay play `watchPlaylistEndpoint` for playlists/podcasts.

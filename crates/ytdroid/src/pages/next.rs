@@ -210,7 +210,7 @@ fn video_to_next_item(video: &PlaylistPanelVideoRenderer) -> Option<NextItem> {
         .navigation_endpoint
         .as_ref()
         .and_then(|e| e.watch_endpoint.as_ref())
-        .and_then(|e| e.music_video_type.clone());
+        .and_then(|e| e.music_video_type().map(str::to_owned));
     Some(NextItem {
         song: SongItem {
             id,
