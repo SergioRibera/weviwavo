@@ -242,6 +242,7 @@ impl InnerTube {
             self.visitor_id.set(v.to_owned()).ok();
         }
         let value = resp.json::<Value>().await.map_err(Error::from)?;
+        tracing::trace!(endpoint, raw_response = %value, "innertube raw response");
         // Also capture from responseContext.visitorData in body (yt-dlp does this too).
         if let Some(vd) = value
             .pointer("/responseContext/visitorData")
