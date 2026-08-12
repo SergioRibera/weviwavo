@@ -81,7 +81,10 @@ pub async fn fetch_audio_bytes(
     let vid_report = video_id.to_owned();
     tokio::spawn(async move {
         if let Err(e) = yt_report.report_playback(&vid_report, duration_secs).await {
-            tracing::warn!(error = %e, "playback report failed");
+            tracing::warn!(error = %e, "watchtime report failed");
+        }
+        if let Err(e) = yt_report.next(Some(&vid_report), None, None, None, None).await {
+            tracing::warn!(error = %e, "next (history signal) failed");
         }
     });
 
