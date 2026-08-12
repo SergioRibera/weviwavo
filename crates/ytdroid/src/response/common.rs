@@ -179,6 +179,7 @@ pub struct WatchEndpoint {
     pub playlist_id: Option<String>,
     pub params: Option<String>,
     pub playlist_set_video_id: Option<String>,
+    pub music_video_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -706,6 +707,20 @@ impl MusicTwoRowItemRenderer {
             .watch_endpoint
             .as_ref()
     }
+
+    /// `musicVideoType` from navigation watchEndpoint or overlay watchEndpoint.
+    #[must_use]
+    pub fn music_video_type(&self) -> Option<&str> {
+        self.navigation_endpoint
+            .watch_endpoint
+            .as_ref()
+            .and_then(|e| e.music_video_type.as_deref())
+            .or_else(|| {
+                self.play_watch_endpoint()?
+                    .music_video_type
+                    .as_deref()
+            })
+    }
 }
 
 // ─────────────────────────────────────────────
@@ -892,6 +907,27 @@ impl MusicResponsiveListItemRenderer {
     #[must_use]
     pub fn play_watch_endpoint(&self) -> Option<&WatchEndpoint> {
         self.overlay.as_ref()?.renderer()?.play_nav()?.watch_endpoint.as_ref()
+    }
+
+    /// `musicVideoType` from the best available source:
+    /// top-level field → navigation watchEndpoint → overlay watchEndpoint.
+    #[must_use]
+    pub fn music_video_type(&self) -> Option<&str> {
+        self.music_video_type
+            .as_deref()
+            .or_else(|| {
+                self.navigation_endpoint
+                    .as_ref()?
+                    .watch_endpoint
+                    .as_ref()?
+                    .music_video_type
+                    .as_deref()
+            })
+            .or_else(|| {
+                self.play_watch_endpoint()?
+                    .music_video_type
+                    .as_deref()
+            })
     }
 
     /// Overlay play `watchPlaylistEndpoint` for playlists/podcasts.

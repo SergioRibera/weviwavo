@@ -247,6 +247,7 @@ pub(crate) fn from_two_row(r: &MusicTwoRowItemRenderer) -> Option<YTItem> {
                     .collect()
             })
             .unwrap_or_default();
+        let music_video_type = r.music_video_type().map(str::to_owned);
         return Some(YTItem::Song(Box::new(SongItem {
             id,
             title,
@@ -259,7 +260,7 @@ pub(crate) fn from_two_row(r: &MusicTwoRowItemRenderer) -> Option<YTItem> {
             like_status: None,
             library_add_token: None,
             library_remove_token: None,
-            music_video_type: None,
+            music_video_type,
         })));
     }
 
@@ -367,7 +368,7 @@ pub(crate) fn from_responsive(r: &MusicResponsiveListItemRenderer) -> Option<YTI
         });
         let duration = r.duration_text().and_then(parse_duration);
         let set_video_id = r.playlist_set_video_id.clone();
-        let music_video_type = r.music_video_type.clone();
+        let music_video_type = r.music_video_type().map(str::to_owned);
         let (library_add_token, library_remove_token) = r.library_tokens();
         return Some(YTItem::Song(Box::new(SongItem {
             id,

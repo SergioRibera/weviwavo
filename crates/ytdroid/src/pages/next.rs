@@ -206,6 +206,11 @@ fn video_to_next_item(video: &PlaylistPanelVideoRenderer) -> Option<NextItem> {
         .and_then(|r| r.runs.first())
         .and_then(|r| parse_duration(&r.text));
     let playlist_set_video_id = video.playlist_set_video_id.clone();
+    let music_video_type = video
+        .navigation_endpoint
+        .as_ref()
+        .and_then(|e| e.watch_endpoint.as_ref())
+        .and_then(|e| e.music_video_type.clone());
     Some(NextItem {
         song: SongItem {
             id,
@@ -219,7 +224,7 @@ fn video_to_next_item(video: &PlaylistPanelVideoRenderer) -> Option<NextItem> {
             like_status: None,
             library_add_token: None,
             library_remove_token: None,
-            music_video_type: None,
+            music_video_type,
         },
         playlist_set_video_id,
     })
