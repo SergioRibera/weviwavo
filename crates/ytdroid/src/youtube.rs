@@ -42,6 +42,8 @@ pub struct AudioStream {
     /// Callers that can supply a streaming PoToken should check this flag and
     /// call the PoToken provider, then set [`AudioStream::streaming_pot`].
     pub needs_gvs_pot: bool,
+    /// Track duration from the player response, used for watchtime reporting.
+    pub duration_secs: u32,
 }
 
 fn clients_for_hints(hints: &ContentHints) -> Vec<YouTubeClient> {
@@ -640,6 +642,13 @@ impl YouTube {
                     let needs_gvs = client.use_web_po_tokens
                         || (has_gvs_requirement && client_pot.is_none());
 
+                    let duration_secs = resp
+                        .video_details
+                        .as_ref()
+                        .and_then(|d| d.length_seconds.as_deref())
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(0);
+
                     // Prefer direct URL (no sig/nsig needed — VISIONOS/VR path).
                     if let Some(fmt) = sd.and_then(|s| s.best_audio_format()) {
                         tracing::debug!(client = client.client_name, bitrate = fmt.bitrate, mime = fmt.mime_type.as_deref().unwrap_or("?"), "direct audio format");
@@ -652,6 +661,7 @@ impl YouTube {
                             is_cipher: false,
                             streaming_pot: spot,
                             needs_gvs_pot: needs_gvs,
+                            duration_secs,
                         });
                     }
 
@@ -667,6 +677,7 @@ impl YouTube {
                             is_cipher: true,
                             streaming_pot: spot,
                             needs_gvs_pot: needs_gvs,
+                            duration_secs,
                         });
                     }
 
@@ -1014,8 +1025,8 @@ impl YouTube {
     /// # Errors
     ///
     /// Propagates HTTP errors.
-    pub async fn report_playback(&self, video_id: &str) -> Result<()> {
-        self.inner.report_playback(video_id).await
+    pub async fn report_playback(&self, video_id: &str, duration_secs: u32) -> Result<()> {
+        self.inner.report_playback(video_id, duration_secs).await
     }
 }
 

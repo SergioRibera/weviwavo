@@ -715,7 +715,7 @@ impl InnerTube {
     /// # Errors
     ///
     /// Propagates HTTP errors.
-    pub async fn report_playback(&self, video_id: &str) -> Result<()> {
+    pub async fn report_playback(&self, video_id: &str, duration_secs: u32) -> Result<()> {
         use base64::Engine as _;
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -725,6 +725,8 @@ impl InnerTube {
             .digest()
             .bytes();
         let cpn = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash[..12]);
+        let len = duration_secs.to_string();
+        let et = (duration_secs.min(30)).to_string();
 
         let cookie_header = self
             .cookies
@@ -735,16 +737,26 @@ impl InnerTube {
 
         let mut req = self
             .http
-            .get("https://s.youtube.com/api/stats/playback")
+            .post("https://music.youtube.com/api/stats/watchtime")
             .query(&[
                 ("ns", "yt"),
                 ("el", "detailpage"),
-                ("cpn", &cpn),
+                ("cpn", cpn.as_str()),
                 ("docid", video_id),
                 ("ver", "2"),
                 ("c", YouTubeClient::WEB_REMIX.client_name),
                 ("cver", YouTubeClient::WEB_REMIX.client_version),
+                ("cplayer", "UNIPLAYER"),
                 ("referrer", MUSIC_REFERER),
+                ("len", len.as_str()),
+                ("st", "0"),
+                ("et", et.as_str()),
+                ("cmt", et.as_str()),
+                ("final", "1"),
+                ("state", "paused"),
+                ("volume", "100"),
+                ("muted", "0"),
+                ("vis", "1"),
             ]);
 
         if !cookie_header.is_empty() {
@@ -752,7 +764,9 @@ impl InnerTube {
         }
 
         let resp = req.send().await?;
-        debug!(video_id, status = %resp.status(), "playback reported");
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        debug!(video_id, %status, cpn, body = %body, "watchtime report response");
         Ok(())
     }
 }
