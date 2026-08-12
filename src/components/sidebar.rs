@@ -4,7 +4,9 @@ use freya::icons::lucide::{bookmark, house, plus};
 use freya::prelude::*;
 use freya::radio::use_radio;
 
-use super::cached_image_source;
+use tokio::sync::mpsc;
+
+use super::use_cached_thumbnail;
 use crate::app::{Data, DataChannel, NavCommand};
 
 const SELECTED_BG: &str = "#282828";
@@ -76,6 +78,95 @@ fn nav_btn(icon: bytes::Bytes, text: &'static str, active: bool, collapsed: bool
             .into_element()
     } else {
         btn.into_element()
+    }
+}
+
+struct SidebarPlaylistRow {
+    id: String,
+    name: String,
+    sub: String,
+    thumbnail: String,
+    nav_cmd: Option<mpsc::Sender<NavCommand>>,
+    collapsed: bool,
+}
+
+impl PartialEq for SidebarPlaylistRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.thumbnail == other.thumbnail && self.collapsed == other.collapsed
+    }
+}
+
+impl Component for SidebarPlaylistRow {
+    fn render(&self) -> impl IntoElement {
+        let thumb_src = use_cached_thumbnail(&self.thumbnail);
+        let id = self.id.clone();
+        let nav = self.nav_cmd.clone();
+        let tooltip_name = self.name.clone();
+
+        let thumb_rect = rect()
+            .width(Size::px(44.))
+            .height(Size::px(44.))
+            .corner_radius(6.)
+            .overflow(Overflow::Clip)
+            .maybe_child(thumb_src.map(|src| {
+                ImageViewer::new(src)
+                    .expanded()
+                    .image_cover(ImageCover::Center)
+            }));
+
+        let row = rect()
+            .horizontal()
+            .cross_align(Alignment::Center)
+            .width(Size::Fill)
+            .height(Size::px(56.))
+            .corner_radius(6.)
+            .overflow(Overflow::Clip)
+            .padding(Gaps::new_symmetric(0., 4.))
+            .spacing(10.)
+            .on_press(move |_| {
+                if let Some(ref tx) = nav {
+                    tx.try_send(NavCommand::BeginNavigation {
+                        playlist_id: id.clone(),
+                    })
+                    .ok();
+                    tx.try_send(NavCommand::LoadPlaylist(id.clone())).ok();
+                }
+            })
+            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+            .child(thumb_rect)
+            .child(
+                rect()
+                    .vertical()
+                    .width(Size::flex(1.0))
+                    .spacing(2.)
+                    .child(
+                        label()
+                            .max_lines(1)
+                            .text_overflow(TextOverflow::Ellipsis)
+                            .font_size(14.)
+                            .color(Color::WHITE)
+                            .text(self.name.clone()),
+                    )
+                    .child(
+                        label()
+                            .max_lines(1)
+                            .font_size(12.)
+                            .text_overflow(TextOverflow::Ellipsis)
+                            .color(Color::from_hex("#888888").unwrap())
+                            .text(self.sub.clone()),
+                    ),
+            );
+
+        if self.collapsed {
+            TooltipContainer::new(Tooltip::new(tooltip_name))
+                .position(AttachedPosition::Right)
+                .delay(Duration::from_millis(300))
+                .child(row)
+                .into_element()
+        } else {
+            row.into_element()
+        }
     }
 }
 
@@ -186,78 +277,15 @@ impl Component for Sidebar {
                             .width(Size::Fill)
                             .height(Size::flex(1.0))
                             .children(playlists_inner.into_iter().map(|p| {
-                                let id = p.id.clone();
-                                let name = p.title.clone();
-                                let tooltip_name = name.clone();
-                                let sub = p.author.clone().unwrap_or_default();
-                                let thumb_src =
-                                    p.thumbnail.as_deref().and_then(cached_image_source);
-                                let nav = nav_cmd_inner.clone();
-
-                                let thumb_rect = rect()
-                                    .width(Size::px(44.))
-                                    .height(Size::px(44.))
-                                    .corner_radius(6.)
-                                    .overflow(Overflow::Clip)
-                                    .maybe_child(thumb_src.map(|src| {
-                                        ImageViewer::new(src)
-                                            .expanded()
-                                            .image_cover(ImageCover::Center)
-                                    }));
-
-                                let row = rect()
-                                    .horizontal()
-                                    .cross_align(Alignment::Center)
-                                    .width(Size::Fill)
-                                    .height(Size::px(56.))
-                                    .corner_radius(6.)
-                                    .overflow(Overflow::Clip)
-                                    .padding(Gaps::new_symmetric(0., 4.))
-                                    .spacing(10.)
-                                    .on_press(move |_| {
-                                        if let Some(ref tx) = nav {
-                                            tx.try_send(NavCommand::BeginNavigation {
-                                                playlist_id: id.clone(),
-                                            })
-                                            .ok();
-                                            tx.try_send(NavCommand::LoadPlaylist(id.clone())).ok();
-                                        }
-                                    })
-                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                                    .child(thumb_rect)
-                                    .child(
-                                        rect()
-                                            .vertical()
-                                            .width(Size::flex(1.0))
-                                            .spacing(2.)
-                                            .child(
-                                                label()
-                                                    .max_lines(1)
-                                                    .text_overflow(TextOverflow::Ellipsis)
-                                                    .font_size(14.)
-                                                    .color(Color::WHITE)
-                                                    .text(name),
-                                            )
-                                            .child(
-                                                label()
-                                                    .max_lines(1)
-                                                    .font_size(12.)
-                                                    .text_overflow(TextOverflow::Ellipsis)
-                                                    .color(Color::from_hex("#888888").unwrap())
-                                                    .text(sub),
-                                            ),
-                                    );
-
-                                if collapsed {
-                                    TooltipContainer::new(Tooltip::new(tooltip_name))
-                                        .position(AttachedPosition::Right)
-                                        .delay(Duration::from_millis(300))
-                                        .child(row)
-                                        .into_element()
-                                } else {
-                                    row.into_element()
+                                SidebarPlaylistRow {
+                                    id: p.id.clone(),
+                                    name: p.title.clone(),
+                                    sub: p.author.clone().unwrap_or_default(),
+                                    thumbnail: p.thumbnail.clone().unwrap_or_default(),
+                                    nav_cmd: nav_cmd_inner.clone(),
+                                    collapsed,
                                 }
+                                .into_element()
                             })),
                     )
             }))
