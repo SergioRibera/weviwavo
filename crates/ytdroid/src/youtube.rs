@@ -1006,6 +1006,17 @@ impl YouTube {
         }
         self.inner.account_menu(&YouTubeClient::WEB_REMIX).await
     }
+
+    /// Report playback so the track appears in listening history on all devices.
+    ///
+    /// Fire-and-forget — errors are non-fatal.
+    ///
+    /// # Errors
+    ///
+    /// Propagates HTTP errors.
+    pub async fn report_playback(&self, video_id: &str) -> Result<()> {
+        self.inner.report_playback(video_id).await
+    }
 }
 
 // ─────────────────────────────────────────────

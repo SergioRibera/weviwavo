@@ -76,6 +76,14 @@ pub async fn fetch_audio_bytes(
     let url = resolve_stream(stream).await?;
     tracing::debug!(%url, "fetching stream bytes");
 
+    let yt_report = yt.clone();
+    let vid_report = video_id.to_owned();
+    tokio::spawn(async move {
+        if let Err(e) = yt_report.report_playback(&vid_report).await {
+            tracing::warn!(error = %e, "playback report failed");
+        }
+    });
+
     let http = reqwest::Client::builder()
         .gzip(true)
         .build()

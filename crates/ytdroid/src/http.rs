@@ -704,6 +704,57 @@ impl InnerTube {
             .await?;
         Ok(serde_json::from_value(raw)?)
     }
+
+    /// Report playback to `s.youtube.com/api/stats/playback` so the track
+    /// appears in the YouTube Music listening history on all devices.
+    ///
+    /// Fire-and-forget — errors are non-fatal. Requires a logged-in session
+    /// (cookies) to be recorded in history; unauthenticated calls are silently
+    /// ignored by YouTube.
+    ///
+    /// # Errors
+    ///
+    /// Propagates HTTP errors.
+    pub async fn report_playback(&self, video_id: &str) -> Result<()> {
+        use base64::Engine as _;
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let hash = sha1_smol::Sha1::from(format!("{nanos}{video_id}").as_bytes())
+            .digest()
+            .bytes();
+        let cpn = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash[..12]);
+
+        let cookie_header = self
+            .cookies
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        let mut req = self
+            .http
+            .get("https://s.youtube.com/api/stats/playback")
+            .query(&[
+                ("ns", "yt"),
+                ("el", "detailpage"),
+                ("cpn", &cpn),
+                ("docid", video_id),
+                ("ver", "2"),
+                ("c", YouTubeClient::WEB_REMIX.client_name),
+                ("cver", YouTubeClient::WEB_REMIX.client_version),
+                ("referrer", MUSIC_REFERER),
+            ]);
+
+        if !cookie_header.is_empty() {
+            req = req.header("cookie", &cookie_header);
+        }
+
+        let resp = req.send().await?;
+        debug!(video_id, status = %resp.status(), "playback reported");
+        Ok(())
+    }
 }
 
 // ─────────────────────────────────────────────
