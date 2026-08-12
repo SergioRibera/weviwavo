@@ -122,6 +122,13 @@ impl<'a> From<&'a YTItem> for SongInfo {
                 thumbnail: v.thumbnail.clone().unwrap_or_default(),
             },
             YTItem::Song(v) => {
+                tracing::debug!(
+                    id = %v.id,
+                    title = %v.title,
+                    music_video_type = ?v.music_video_type,
+                    is_video = v.is_video_song(),
+                    "song item"
+                );
                 let left = if !v.artists.is_empty() {
                     TextInfo::authors(v.artists.clone())
                 } else {
