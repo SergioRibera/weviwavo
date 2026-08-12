@@ -910,13 +910,26 @@ impl MusicResponsiveListItemRenderer {
     }
 
     /// `musicVideoType` from the best available source:
-    /// top-level field → navigation watchEndpoint → overlay watchEndpoint.
+    /// top-level → navigation watchEndpoint → flex column title run watchEndpoint → overlay watchEndpoint.
     #[must_use]
     pub fn music_video_type(&self) -> Option<&str> {
         self.music_video_type
             .as_deref()
             .or_else(|| {
                 self.navigation_endpoint
+                    .as_ref()?
+                    .watch_endpoint
+                    .as_ref()?
+                    .music_video_type
+                    .as_deref()
+            })
+            .or_else(|| {
+                self.flex_columns
+                    .first()?
+                    .runs()?
+                    .runs
+                    .first()?
+                    .navigation_endpoint
                     .as_ref()?
                     .watch_endpoint
                     .as_ref()?
