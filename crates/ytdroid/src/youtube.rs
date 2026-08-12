@@ -42,7 +42,7 @@ pub struct AudioStream {
     /// Callers that can supply a streaming PoToken should check this flag and
     /// call the PoToken provider, then set [`AudioStream::streaming_pot`].
     pub needs_gvs_pot: bool,
-    /// Track duration from the player response, used for watchtime reporting.
+    /// Track duration from the player response.
     pub duration_secs: u32,
 }
 
@@ -735,7 +735,11 @@ impl YouTube {
                 None,
             )
             .await?;
-        NextPage::from_next_response(&raw)
+        let result = NextPage::from_next_response(&raw);
+        if result.is_err() {
+            tracing::debug!(raw = ?raw, "next parse failed — raw response");
+        }
+        result
     }
 
     /// Continue an up-next queue.
@@ -1018,25 +1022,25 @@ impl YouTube {
         self.inner.account_menu(&YouTubeClient::WEB_REMIX).await
     }
 
-    /// Report playback so the track appears in listening history on all devices.
+    /// Fetch the `videostatsPlaybackUrl` from an authenticated WEB_REMIX player request,
+    /// then ping it to register the track in YouTube Music listening history.
     ///
-    /// Fire-and-forget — errors are non-fatal.
-    ///
-    /// # Errors
-    ///
-    /// Propagates HTTP errors.
-    /// Fetch `music.youtube.com` HTML to capture the `SESSION_TOKEN` (cached globally).
-    /// Call once before `report_playback` for history tracking to work.
-    ///
-    /// # Errors
-    ///
-    /// Propagates HTTP errors.
-    pub async fn fetch_session_token(&self) -> Result<Option<String>> {
-        self.inner.fetch_session_token().await
-    }
-
-    pub async fn report_playback(&self, video_id: &str, duration_secs: u32) -> Result<()> {
-        self.inner.report_playback(video_id, duration_secs).await
+    /// Uses WEB_REMIX (not the VISIONOS stream client) so the event ID is tied to the
+    /// user's authenticated session. No-op when not logged in.
+    pub async fn report_history(&self, video_id: &str) -> Result<()> {
+        let resp = self.inner.player(&YouTubeClient::WEB_REMIX, video_id, None, None, None).await?;
+        let playback_url = resp
+            .playback_tracking
+            .as_ref()
+            .and_then(|pt| pt.videostats_playback_url.as_ref())
+            .and_then(|u| u.base_url.as_deref());
+        match playback_url {
+            Some(url) => self.inner.report_playback(video_id, url).await,
+            None => {
+                tracing::debug!(video_id, "no playbackTracking URL in WEB_REMIX response");
+                Ok(())
+            }
+        }
     }
 }
 

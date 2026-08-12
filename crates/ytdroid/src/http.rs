@@ -4,11 +4,8 @@
 //! higher-level [`crate::YouTube`] API unless they need raw JSON access.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
-/// Cached SESSION_TOKEN extracted from music.youtube.com HTML.
-/// Valid for the duration of the user's browser session (days).
-static SESSION_TOKEN: Mutex<Option<String>> = Mutex::new(None);
 
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
@@ -709,117 +706,57 @@ impl InnerTube {
         Ok(serde_json::from_value(raw)?)
     }
 
-    /// Report playback to `s.youtube.com/api/stats/playback` so the track
-    /// appears in the YouTube Music listening history on all devices.
-    ///
-    /// Fire-and-forget — errors are non-fatal. Requires a logged-in session
-    /// (cookies) to be recorded in history; unauthenticated calls are silently
-    /// ignored by YouTube.
-    ///
-    /// # Errors
-    ///
-    /// Propagates HTTP errors.
-    /// Fetch `music.youtube.com` HTML and extract the `SESSION_TOKEN` from `ytcfg.set(...)`.
-    /// Result is cached globally — subsequent calls are instant.
-    ///
-    /// # Errors
-    ///
-    /// Propagates HTTP errors. Returns `Ok(None)` if token not found in HTML.
-    pub async fn fetch_session_token(&self) -> Result<Option<String>> {
-        // Return cached value if available.
-        if let Some(tok) = SESSION_TOKEN.lock().unwrap().clone() {
-            return Ok(Some(tok));
-        }
-
-        let cookie_header = self
-            .cookies
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("; ");
-
-        let mut req = self
-            .http
-            .get("https://music.youtube.com")
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0")
-            .header("Accept-Language", "en-US,en;q=0.9");
-
-        if !cookie_header.is_empty() {
-            req = req.header("cookie", &cookie_header);
-        }
-
-        let html = req.send().await?.text().await?;
-
-        let token = extract_session_token(&html);
-        if let Some(ref tok) = token {
-            debug!(len = tok.len(), "SESSION_TOKEN captured");
-            *SESSION_TOKEN.lock().unwrap() = Some(tok.clone());
-        } else {
-            warn!("SESSION_TOKEN not found in music.youtube.com HTML");
-        }
-
-        Ok(token)
-    }
-
-    pub async fn report_playback(&self, video_id: &str, duration_secs: u32) -> Result<()> {
-        use base64::Engine as _;
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let hash = sha1_smol::Sha1::from(format!("{nanos}{video_id}").as_bytes())
-            .digest()
-            .bytes();
-        let cpn = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash[..12]);
-        let len = duration_secs.to_string();
-        let et = (duration_secs.min(30)).to_string();
-
-        let cookie_header = self
-            .cookies
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("; ");
-
-        let mut req = self
-            .http
-            .post("https://music.youtube.com/api/stats/watchtime")
-            .query(&[
-                ("ns", "yt"),
-                ("el", "detailpage"),
-                ("cpn", cpn.as_str()),
-                ("docid", video_id),
-                ("ver", "2"),
-                ("c", YouTubeClient::WEB_REMIX.client_name),
-                ("cver", YouTubeClient::WEB_REMIX.client_version),
-                ("cplayer", "UNIPLAYER"),
-                ("referrer", MUSIC_REFERER),
-                ("len", len.as_str()),
-                ("st", "0"),
-                ("et", et.as_str()),
-                ("cmt", et.as_str()),
-                ("final", "1"),
-                ("state", "paused"),
-                ("volume", "100"),
-                ("muted", "0"),
-                ("vis", "1"),
-            ]);
-
-        if !cookie_header.is_empty() {
-            req = req.header("cookie", &cookie_header);
-        }
-
-        // Include SESSION_TOKEN if available — required for YouTube to credit history.
-        let session_token = SESSION_TOKEN.lock().unwrap().clone();
-        let resp = if let Some(ref tok) = session_token {
-            req.form(&[("session_token", tok.as_str())]).send().await?
-        } else {
-            req.send().await?
+    /// Ping `s.youtube.com/api/stats/playback` so the track appears in
+    /// YouTube Music listening history. Requires authenticated cookies.
+    pub async fn report_playback(&self, video_id: &str, playback_url: &str) -> Result<()> {
+        let cpn = {
+            use base64::Engine as _;
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let hash = sha1_smol::Sha1::from(format!("{nanos}{video_id}").as_bytes())
+                .digest()
+                .bytes();
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&hash[..12])
         };
 
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        debug!(video_id, %status, cpn, has_session_token = session_token.is_some(), body = %body, "watchtime report response");
+        let cookie_header = self
+            .cookies
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+
+        // SAPISIDHASH authenticates the request — derived from __Secure-3PAPISID cookie.
+        // ytmusicapi uses this on all requests including stats pings (origin without trailing slash).
+        let sapisidhash = self.cookies.get("__Secure-3PAPISID").map(|sapisid| {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let hex = sha1_smol::Sha1::from(
+                format!("{ts} {sapisid} https://music.youtube.com").as_bytes(),
+            )
+            .digest()
+            .to_string();
+            format!("SAPISIDHASH {ts}_{hex}")
+        });
+
+        let mut req = self
+            .http
+            .get(playback_url)
+            .query(&[("ver", "2"), ("c", YouTubeClient::WEB_REMIX.client_name), ("cpn", cpn.as_str())])
+            .header("Origin", MUSIC_REFERER)
+            .header("Referer", MUSIC_REFERER);
+        if !cookie_header.is_empty() {
+            req = req.header("cookie", &cookie_header);
+        }
+        if let Some(ref auth) = sapisidhash {
+            req = req.header("Authorization", auth);
+        }
+        let resp = req.send().await?;
+        debug!(video_id, status = %resp.status(), cpn, "playback ping");
         Ok(())
     }
 }
@@ -869,25 +806,3 @@ impl AddDedupOption {
     }
 }
 
-/// Extract SESSION_TOKEN (or XSRF_TOKEN fallback) from a `ytcfg.set(...)` block.
-fn extract_session_token(html: &str) -> Option<String> {
-    // Dump ytcfg keys to debug if nothing found
-    for marker in &["\"SESSION_TOKEN\":\"", "\"XSRF_TOKEN\":\""] {
-        if let Some(start) = html.find(marker) {
-            let rest = &html[start + marker.len()..];
-            if let Some(end) = rest.find('"') {
-                let token = &rest[..end];
-                if !token.is_empty() {
-                    debug!(key = &marker[1..marker.len()-3], len = token.len(), "session token found");
-                    return Some(token.to_owned());
-                }
-            }
-        }
-    }
-    // Log the first ytcfg.set block for diagnosis
-    if let Some(cfg_start) = html.find("ytcfg.set(") {
-        let snippet = &html[cfg_start..][..html[cfg_start..].len().min(500)];
-        debug!(ytcfg_snippet = snippet, "ytcfg.set snippet (no SESSION_TOKEN or XSRF_TOKEN found)");
-    }
-    None
-}

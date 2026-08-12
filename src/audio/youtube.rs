@@ -73,21 +73,14 @@ pub async fn fetch_audio_bytes(
         }
     }
 
-    let duration_secs = stream.duration_secs;
     let url = resolve_stream(stream).await?;
     tracing::debug!(%url, "fetching stream bytes");
 
     let yt_report = yt.clone();
     let vid_report = video_id.to_owned();
     tokio::spawn(async move {
-        if let Err(e) = yt_report.fetch_session_token().await {
-            tracing::warn!(error = %e, "session token fetch failed");
-        }
-        if let Err(e) = yt_report.report_playback(&vid_report, duration_secs).await {
-            tracing::warn!(error = %e, "watchtime report failed");
-        }
-        if let Err(e) = yt_report.next(Some(&vid_report), None, None, None, None).await {
-            tracing::warn!(error = %e, "next (history signal) failed");
+        if let Err(e) = yt_report.report_history(&vid_report).await {
+            tracing::warn!(error = %e, "history report failed");
         }
     });
 

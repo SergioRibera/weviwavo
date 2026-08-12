@@ -524,6 +524,20 @@ pub struct PlayerResponse {
     pub playability_status: PlayabilityStatus,
     pub streaming_data: Option<StreamingData>,
     pub video_details: Option<VideoDetails>,
+    pub playback_tracking: Option<PlaybackTracking>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackTracking {
+    pub videostats_playback_url: Option<VideostatsUrl>,
+    pub videostats_watchtime_url: Option<VideostatsUrl>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VideostatsUrl {
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
