@@ -211,7 +211,7 @@ impl YouTube {
             .inner
             .browse(&YouTubeClient::WEB_REMIX, HOME, None, Some(continuation))
             .await?;
-        HomePage::from_browse_response(&raw)
+        HomePage::from_continuation_response(&raw)
     }
 
     /// Search `YouTube` Music.

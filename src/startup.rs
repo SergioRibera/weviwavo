@@ -70,7 +70,26 @@ async fn startup_inner(mut radio: RadioStation<Data, DataChannel>) {
     tokio::spawn(crate::audio::nsig::warm());
 
     match yt.home(None).await {
-        Ok(feed) => {
+        Ok(mut feed) => {
+            // Fetch continuation pages until exhausted or capped (YT paginates the home feed).
+            let mut cont = feed.continuation.take();
+            let mut page_count = 0u8;
+            while let Some(token) = cont.take() {
+                if page_count >= 3 {
+                    break;
+                }
+                page_count += 1;
+                match yt.home_continuation(&token).await {
+                    Ok(mut more) => {
+                        feed.sections.append(&mut more.sections);
+                        cont = more.continuation.take();
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "home continuation failed");
+                        break;
+                    }
+                }
+            }
             tracing::debug!(sections = feed.sections.len(), "home feed loaded");
             radio.write_channel(DataChannel::Feed).feed = feed;
         }

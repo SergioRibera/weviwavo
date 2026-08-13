@@ -155,6 +155,11 @@ impl BrowseEndpoint {
     }
 
     #[must_use]
+    pub fn is_user_channel_endpoint(&self) -> bool {
+        matches!(self.page_type(), Some(PAGE_TYPE_USER_CHANNEL))
+    }
+
+    #[must_use]
     pub fn is_podcast_endpoint(&self) -> bool {
         matches!(self.page_type(), Some(PAGE_TYPE_PODCAST_SHOW))
     }

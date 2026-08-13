@@ -234,7 +234,9 @@ pub(crate) fn from_two_row(r: &MusicTwoRowItemRenderer) -> Option<YTItem> {
                         run.navigation_endpoint
                             .as_ref()
                             .and_then(|e| e.browse_endpoint.as_ref())
-                            .is_some_and(super::response::common::BrowseEndpoint::is_artist_endpoint)
+                            .is_some_and(|b| {
+                                b.is_artist_endpoint() || b.is_user_channel_endpoint()
+                            })
                     })
                     .map(|run| Artist {
                         name: run.text.clone(),
@@ -247,6 +249,16 @@ pub(crate) fn from_two_row(r: &MusicTwoRowItemRenderer) -> Option<YTItem> {
                     .collect()
             })
             .unwrap_or_default();
+        // Fallback: if no linked artist found, take the first subtitle run as plain text.
+        let artists = if artists.is_empty() {
+            r.subtitle
+                .as_ref()
+                .and_then(|s| s.odd_elements().next())
+                .map(|run| vec![Artist { name: run.text.clone(), id: None }])
+                .unwrap_or_default()
+        } else {
+            artists
+        };
         let music_video_type = r.music_video_type().map(str::to_owned);
         return Some(YTItem::Song(Box::new(SongItem {
             id,
