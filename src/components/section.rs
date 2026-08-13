@@ -217,28 +217,61 @@ impl Component for Section {
         // ── Pixel-accurate scroll geometry ────────────────────────────────────
         const SPACING: f32 = 20.;
         const COL_WIDTH: f32 = 420.;
+        // Sidebar is 72px collapsed + section has 10px padding each side = 92px offset.
+        // Conservative underestimate of visible width so the right button disables
+        // before the last item can be cut — small screens see sidebar expanded (240px)
+        // but we accept a minor conservative clamp in that case.
+        const SIDEBAR_MIN: f32 = 72.;
+        const SECTION_PAD: f32 = 20.;
 
         let window_w = Platform::get().root_size.read().width;
-        let visible_w = window_w * (max_width / 100.0);
+        let visible_w = (window_w - SIDEBAR_MIN - SECTION_PAD) * (max_width / 100.0);
 
-        let (scroll_amount, max_overflow) = if is_list {
-            let col_count = self.items.len().div_ceil(4);
-            let total_w = col_count as f32 * (COL_WIDTH + SPACING) - SPACING;
-            let overflow = (total_w - visible_w).max(0.) as i32;
-            let amount = (3. * (COL_WIDTH + SPACING)) as i32;
-            (amount, overflow)
+        // ── Carousel: cumulative item positions → snap to boundaries ──────────
+        // positions[i] = pixel offset where item i starts inside the ScrollView.
+        let item_positions: Vec<i32> = {
+            let mut pos = 0i32;
+            self.items.iter().map(|item| {
+                let p = pos;
+                pos += (ytitem_card_width(item) + SPACING) as i32;
+                p
+            }).collect()
+        };
+
+        let total_w_carousel = item_positions.last().copied().unwrap_or(0) as f32
+            + self.items.last().map_or(0., ytitem_card_width);
+
+        // Index of the first item whose left edge is at or past the current scroll pos.
+        let first_visible_idx = item_positions
+            .partition_point(|&p| p < (-current_x));
+
+        // max_overflow: scroll until last item's right edge aligns with viewport right.
+        let max_overflow_carousel = (total_w_carousel - visible_w).max(0.) as i32;
+
+        // Scroll targets: snap to item[first ± 3], clamped.
+        let snap_right = {
+            let next = (first_visible_idx + 3).min(item_positions.len().saturating_sub(1));
+            (-item_positions[next]).max(-max_overflow_carousel)
+        };
+        let snap_left = {
+            let prev = first_visible_idx.saturating_sub(3);
+            (-item_positions[prev]).min(0)
+        };
+
+        // ── List/Grid: uniform column snap ────────────────────────────────────
+        let col_count = self.items.len().div_ceil(4);
+        let col_stride = (COL_WIDTH + SPACING) as i32;
+        let total_w_list = col_count as f32 * (COL_WIDTH + SPACING) - SPACING;
+        let max_overflow_list = (total_w_list - visible_w).max(0.) as i32;
+
+        let current_col = (-current_x) / col_stride;
+        let snap_right_list = (-((current_col + 3) * col_stride)).max(-max_overflow_list);
+        let snap_left_list  = (-(current_col.saturating_sub(3) * col_stride)).min(0);
+
+        let (max_overflow, snap_right_target, snap_left_target) = if is_list {
+            (max_overflow_list, snap_right_list, snap_left_list)
         } else {
-            let widths: Vec<f32> = self.items.iter().map(ytitem_card_width).collect();
-            let total_w = widths.iter().sum::<f32>()
-                + SPACING * widths.len().saturating_sub(1) as f32;
-            let overflow = (total_w - visible_w).max(0.) as i32;
-            let avg_w = if widths.is_empty() {
-                223.
-            } else {
-                widths.iter().sum::<f32>() / widths.len() as f32
-            };
-            let amount = (3. * (avg_w + SPACING)) as i32;
-            (amount, overflow)
+            (max_overflow_carousel, snap_right, snap_left)
         };
 
         let can_scroll_left = current_x < 0;
@@ -249,7 +282,7 @@ impl Component for Section {
             content_len = self.items.len(),
             current_x,
             max_overflow,
-            scroll_amount,
+            first_visible_idx,
             can_scroll_left,
             can_scroll_right,
             "section render"
@@ -303,13 +336,11 @@ impl Component for Section {
             .child(
                 rect().horizontal().spacing(12.).children([
                     scroll_button(ScrollDir::Left, can_scroll_left, move || {
-                        let target = (current_x + scroll_amount).min(0);
-                        scroll_controller.scroll_to_x(target);
+                        scroll_controller.scroll_to_x(snap_left_target);
                     })
                     .into_element(),
                     scroll_button(ScrollDir::Right, can_scroll_right, move || {
-                        let target = (current_x - scroll_amount).max(-max_overflow);
-                        scroll_controller.scroll_to_x(target);
+                        scroll_controller.scroll_to_x(snap_right_target);
                     })
                     .into_element(),
                 ]),
