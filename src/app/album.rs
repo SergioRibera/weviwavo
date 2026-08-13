@@ -16,7 +16,6 @@ pub struct Album {
 impl Component for Album {
     fn render(&self) -> impl IntoElement {
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
-        let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let router = RouterContext::get();
         let mut last_requested = use_state(|| String::new());
 
@@ -32,9 +31,8 @@ impl Component for Album {
         let state = nav_radio.read();
         let nav_cmd = state.nav_cmd.clone();
         let album_view = state.album_view.clone();
+        let audio_cmd = state.audio_cmd.clone();
         drop(state);
-
-        let audio_cmd = audio_radio.read().audio_cmd.clone();
 
         if *last_requested.read() != self.id {
             last_requested.set(self.id.clone());

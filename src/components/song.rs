@@ -206,15 +206,15 @@ impl Component for SongInfo {
         let mut hover = use_state(|| false);
         let thumb_src = use_cached_thumbnail(&self.thumbnail);
         let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
-        let (is_playing, audio_cmd) = {
+        let is_playing = {
             let s = audio_radio.read();
-            (
-                s.player.current_video_id == self.id && s.player.is_playing,
-                s.audio_cmd.clone(),
-            )
+            s.player.current_video_id == self.id && s.player.is_playing
         };
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
-        let nav_cmd = nav_radio.read().nav_cmd.clone();
+        let nav_state = nav_radio.read();
+        let audio_cmd = nav_state.audio_cmd.clone();
+        let nav_cmd = nav_state.nav_cmd.clone();
+        drop(nav_state);
 
         let video_id = self.id.clone();
         let song_title = self.title.clone();

@@ -15,12 +15,12 @@ pub async fn run_startup(mut radio: RadioStation<Data, DataChannel>) {
 
     let sender = engine.sender();
     {
-        let mut state = radio.write_channel(DataChannel::Player);
-        state.audio_cmd = Some(sender.clone());
-        state.player.volume = crate::prefs::load_volume();
+        radio.write_channel(DataChannel::Player).player.volume = crate::prefs::load_volume();
     }
     {
-        radio.write_channel(DataChannel::Navigation).nav_cmd = Some(nav_tx);
+        let mut state = radio.write_channel(DataChannel::Navigation);
+        state.audio_cmd = Some(sender.clone());
+        state.nav_cmd = Some(nav_tx);
     }
 
     sender.try_send(AudioCommand::SetVolume(radio.read().player.volume)).ok();
