@@ -349,7 +349,9 @@ pub(crate) fn from_responsive(r: &MusicResponsiveListItemRenderer) -> Option<YTI
                         run.navigation_endpoint
                             .as_ref()
                             .and_then(|e| e.browse_endpoint.as_ref())
-                            .is_some_and(super::response::common::BrowseEndpoint::is_artist_endpoint)
+                            .is_some_and(|b| {
+                                b.is_artist_endpoint() || b.is_user_channel_endpoint()
+                            })
                     })
                     .map(|run| Artist {
                         name: run.text.clone(),
@@ -362,6 +364,15 @@ pub(crate) fn from_responsive(r: &MusicResponsiveListItemRenderer) -> Option<YTI
                     .collect()
             })
             .unwrap_or_default();
+        let col1_fallback = r.flex_columns.get(1).and_then(|c| c.runs());
+        let artists = if artists.is_empty() {
+            col1_fallback
+                .and_then(|runs| runs.odd_elements().next())
+                .map(|run| vec![Artist { name: run.text.clone(), id: None }])
+                .unwrap_or_default()
+        } else {
+            artists
+        };
         let album = r.flex_columns.get(2).and_then(|c| c.runs()).and_then(|runs| {
             let run = runs.runs.first()?;
             let b = run

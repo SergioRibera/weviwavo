@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::time::Instant;
 
 use freya::prelude::*;
 use freya::radio::use_radio;
@@ -157,6 +158,35 @@ impl Component for FeedListRow {
     }
 }
 
+/// Spawns a per-frame scroll animation from `start` to `end` using cubic ease-out.
+/// Returns a `TaskHandle` that can be `.cancel()`-ed on the next click.
+fn spawn_scroll_anim(mut ctrl: ScrollController, start: i32, end: i32) -> TaskHandle {
+    spawn(async move {
+        let mut ticker = RenderingTicker::get();
+        let platform = Platform::get();
+        const DURATION: u128 = 350;
+        let mut elapsed_total: u128 = 0;
+        let mut prev = Instant::now();
+        loop {
+            ticker.tick().await;
+            // Schedule the next frame — without this the ticker never fires again
+            // unless something else (mouse movement) triggers a redraw.
+            platform.send(UserEvent::RequestRedraw);
+            let frame_ms = prev.elapsed().as_millis().min(100);
+            elapsed_total += frame_ms;
+            prev = Instant::now();
+            if elapsed_total >= DURATION {
+                ctrl.scroll_to_x(end);
+                break;
+            }
+            let t = elapsed_total as f64 / DURATION as f64;
+            let eased = 1.0 - (1.0 - t).powi(3);
+            let x = start as f64 + (end as f64 - start as f64) * eased;
+            ctrl.scroll_to_x(x as i32);
+        }
+    })
+}
+
 fn ytitem_card_width(item: &YTItem) -> f32 {
     match item {
         YTItem::Song(s) if s.is_video_song() => 402.,
@@ -205,6 +235,7 @@ impl Component for Section {
     fn render(&self) -> impl IntoElement {
         let max_width = use_responsive_width();
         let mut scroll_controller = use_scroll_controller(ScrollConfig::default);
+        let mut scroll_task: State<Option<TaskHandle>> = use_state(|| None);
 
         // Freya stores scroll as negative offsets: 0 = start, -N = scrolled N px right.
         let (current_x, _): (i32, i32) = scroll_controller.into();
@@ -336,11 +367,15 @@ impl Component for Section {
             .child(
                 rect().horizontal().spacing(12.).children([
                     scroll_button(ScrollDir::Left, can_scroll_left, move || {
-                        scroll_controller.scroll_to_x(snap_left_target);
+                        if let Some(t) = scroll_task.write().take() { t.cancel(); }
+                        let task = spawn_scroll_anim(scroll_controller, current_x, snap_left_target);
+                        *scroll_task.write() = Some(task);
                     })
                     .into_element(),
                     scroll_button(ScrollDir::Right, can_scroll_right, move || {
-                        scroll_controller.scroll_to_x(snap_right_target);
+                        if let Some(t) = scroll_task.write().take() { t.cancel(); }
+                        let task = spawn_scroll_anim(scroll_controller, current_x, snap_right_target);
+                        *scroll_task.write() = Some(task);
                     })
                     .into_element(),
                 ]),
