@@ -3,8 +3,18 @@
 use crate::error::{Error, Result};
 use crate::models::SongItem;
 use crate::response::common::get_continuation;
-use crate::response::{NextResponse, PlaylistPanelVideoRenderer};
+use crate::response::{NextContents, NextResponse, PlaylistPanelVideoRenderer, WatchNextTabbedResultsRenderer};
 use super::parse_duration;
+
+/// Watch endpoint extracted from an `automixPreviewVideoRenderer` item.
+/// When `NextPage::items` is empty and this is `Some`, the caller should
+/// follow this endpoint (via `YouTube::next_radio`) to get the personalized queue.
+#[derive(Debug, Clone)]
+pub struct AutomixEndpoint {
+    pub video_id: Option<String>,
+    pub playlist_id: Option<String>,
+    pub params: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct NextPage {
@@ -15,6 +25,9 @@ pub struct NextPage {
     pub related_browse_id: Option<String>,
     /// Radio/mood chips shown above the up-next queue.
     pub chips: Vec<NextChip>,
+    /// Personalized autoplay endpoint from `automixPreviewVideoRenderer`.
+    /// Present when YouTube wants us to follow this to get the real queue.
+    pub automix_endpoint: Option<AutomixEndpoint>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,12 +114,25 @@ impl NextPage {
         let related_browse_id = response
             .contents
             .as_ref()
-            .and_then(|c| c.tabbed_renderer.as_ref())
-            .and_then(|t| t.watch_next_tabbed_results_renderer.as_ref())
+            .and_then(|c| watch_next_tabbed(c))
             .and_then(|r| r.tabs.get(2))
             .and_then(|t| t.tab_renderer.endpoint.as_ref())
             .and_then(|e| e.browse_endpoint.as_ref())
             .and_then(|b| b.browse_id.clone());
+
+        let automix_endpoint = panel.contents.iter().find_map(|c| {
+            c.automix_preview_video_renderer
+                .as_ref()
+                .and_then(|a| a.content.as_ref())
+                .and_then(|c| c.automix_playlist_video_renderer.as_ref())
+                .and_then(|r| r.navigation_endpoint.as_ref())
+                .and_then(|e| e.watch_playlist_endpoint.as_ref())
+                .map(|wpe| AutomixEndpoint {
+                    video_id: None,
+                    playlist_id: wpe.playlist_id.clone(),
+                    params: wpe.params.clone(),
+                })
+        });
 
         Ok(Self {
             items,
@@ -114,6 +140,7 @@ impl NextPage {
             continuation,
             related_browse_id,
             chips,
+            automix_endpoint,
         })
     }
 
@@ -151,16 +178,26 @@ impl NextPage {
     }
 }
 
+fn watch_next_tabbed(c: &NextContents) -> Option<&WatchNextTabbedResultsRenderer> {
+    // Standard YouTube Music path: singleColumnMusicWatchNextResultsRenderer.tabbedRenderer
+    if let Some(wntr) = c.single_column_music_watch_next_results_renderer
+        .as_ref()
+        .and_then(|sc| sc.tabbed_renderer.as_ref())
+        .and_then(|t| t.watch_next_tabbed_results_renderer.as_ref())
+    {
+        return Some(wntr);
+    }
+    // Fallback: direct tabbedRenderer
+    c.tabbed_renderer
+        .as_ref()
+        .and_then(|t| t.watch_next_tabbed_results_renderer.as_ref())
+}
+
 fn queue_renderer(
     response: &NextResponse,
 ) -> Option<&crate::response::MusicQueueRenderer> {
-    response
-        .contents
-        .as_ref()?
-        .tabbed_renderer
-        .as_ref()?
-        .watch_next_tabbed_results_renderer
-        .as_ref()?
+    let c = response.contents.as_ref()?;
+    watch_next_tabbed(c)?
         .tabs
         .first()?
         .tab_renderer

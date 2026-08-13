@@ -3,7 +3,7 @@ use freya::icons::lucide::play;
 use freya::prelude::*;
 use freya::radio::use_radio;
 
-use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData};
+use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData, QueueSong};
 use crate::audio::{AudioCommand, AudioQuality};
 use crate::components::{PlaylistSongRow, SongInfo, cached_image_source, use_cached_thumbnail};
 
@@ -300,8 +300,21 @@ fn render_header(
                 .on_press({
                     let audio_cmd = audio_cmd.clone();
                     move |_| {
-                        if let Some(first) = songs.first() {
-                            send_play(&audio_cmd, first);
+                        if let Some(tx) = &audio_cmd {
+                            if !songs.is_empty() {
+                                let queue: Vec<QueueSong> = songs.iter().map(|s| QueueSong {
+                                    video_id: s.id.clone(),
+                                    title: s.title.clone(),
+                                    artist: s.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                                    album: s.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+                                    thumbnail_url: s.thumbnail.clone().unwrap_or_default(),
+                                }).collect();
+                                tx.try_send(AudioCommand::PlayFromQueue {
+                                    songs: queue,
+                                    index: 0,
+                                    quality: AudioQuality::Medium,
+                                }).ok();
+                            }
                         }
                     }
                 })
@@ -339,27 +352,3 @@ fn render_header(
     }
 }
 
-fn send_play(
-    audio_cmd: &Option<tokio::sync::mpsc::Sender<AudioCommand>>,
-    song: &ytdroid::models::SongItem,
-) {
-    if let Some(tx) = audio_cmd {
-        tx.try_send(AudioCommand::Play {
-            video_id: song.id.clone(),
-            quality: AudioQuality::Medium,
-            title: song.title.clone(),
-            artist: song
-                .artists
-                .first()
-                .map(|a| a.name.clone())
-                .unwrap_or_default(),
-            album: song
-                .album
-                .as_ref()
-                .map(|a| a.name.clone())
-                .unwrap_or_default(),
-            thumbnail_url: song.thumbnail.clone().unwrap_or_default(),
-        })
-        .ok();
-    }
-}

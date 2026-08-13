@@ -88,7 +88,6 @@ impl Component for PlaylistSongRow {
         let album_id = self.song.album.as_ref().map(|a| a.id.clone());
         let duration = self.song.duration.map(fmt_duration).unwrap_or_default();
 
-        let is_suggestion = self.is_suggestion;
         let queue_index = self.queue_index;
         let thumbnail_url_str =
             self.song.thumbnail.clone().unwrap_or_default();

@@ -637,20 +637,29 @@ pub struct AutomixPreviewVideoRenderer {
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AutomixContent {
-    pub automix_play_button_renderer: Option<AutomixPlayButtonRenderer>,
+    pub automix_playlist_video_renderer: Option<AutomixPlaylistVideoRenderer>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct AutomixPlayButtonRenderer {
-    pub play_navigation_endpoint: Option<common::NavigationEndpoint>,
+pub struct AutomixPlaylistVideoRenderer {
+    pub navigation_endpoint: Option<common::NavigationEndpoint>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct NextContents {
+    /// YouTube Music standard path: contents.singleColumnMusicWatchNextResultsRenderer.tabbedRenderer
+    pub single_column_music_watch_next_results_renderer: Option<SingleColumnMusicWatchNextResultsRenderer>,
+    /// Fallback path used by some older responses: contents.tabbedRenderer
     pub tabbed_renderer: Option<NextTabbedRenderer>,
     pub two_column_watch_next_results: Option<TwoColumnWatchNextResults>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SingleColumnMusicWatchNextResultsRenderer {
+    pub tabbed_renderer: Option<NextTabbedRenderer>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

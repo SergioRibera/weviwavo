@@ -138,17 +138,16 @@ pub async fn run_audio_engine(
 ) {
     let (rodio_tx, rodio_rx) = std::sync::mpsc::channel::<RodioCmd>();
     let (fetch_tx, mut fetch_rx) = mpsc::channel::<Result<AudioRaw, String>>(4);
+    let (queue_tx, mut queue_rx) = mpsc::channel::<Vec<QueueSong>>(4);
 
     let progress = Arc::new(Mutex::new(ProgressState::default()));
     let progress_for_rodio = Arc::clone(&progress);
 
-    // Shared flag: the currently-playing source sets this to `true` when it
-    // runs out of samples.  The engine detects it during the progress tick
-    // and advances the queue.
     let song_done = Arc::new(AtomicBool::new(false));
 
-    // The rodio I/O thread is blocking and does not touch Freya state — safe
-    // to dispatch to the thread pool.
+    // `true` while we're waiting for an auto-queue fetch after the queue exhausted.
+    let mut fetching_next = false;
+
     tokio::task::spawn_blocking(move || {
         rodio_thread(rodio_rx, progress_for_rodio);
     });
@@ -159,7 +158,8 @@ pub async fn run_audio_engine(
         tokio::select! {
             maybe_cmd = rx.recv() => {
                 let Some(cmd) = maybe_cmd else { break };
-                handle_command(cmd, &rodio_tx, &mut radio, &fetch_tx, &song_done).await;
+                handle_command(cmd, &rodio_tx, &mut radio, &fetch_tx, &queue_tx, &song_done).await;
+                fetching_next = false;
             }
             Some(result) = fetch_rx.recv() => {
                 match result {
@@ -178,6 +178,53 @@ pub async fn run_audio_engine(
                     }
                 }
             }
+            Some(songs) = queue_rx.recv() => {
+                tracing::debug!(fetching_next, count = songs.len(), first = songs.first().map(|s| s.video_id.as_str()).unwrap_or(""), "queue_rx received");
+                if fetching_next {
+                    fetching_next = false;
+                    if let Some(first) = songs.first().cloned() {
+                        info!(next_video_id = first.video_id, "auto-queue: playing next suggestion");
+                        let cookies = radio.read().cookie_header.clone();
+                        let vol = radio.read().player.volume;
+                        {
+                            let mut s = radio.write_channel(DataChannel::Player);
+                            let p = &mut s.player;
+                            p.queue = songs;
+                            p.queue_index = 0;
+                            p.title = first.title.clone();
+                            p.artist = first.artist.clone();
+                            p.album = first.album.clone();
+                            p.thumbnail_url = first.thumbnail_url.clone();
+                            p.current_secs = 0.;
+                            p.is_playing = true;
+                            p.current_video_id = first.video_id.clone();
+                        }
+                        rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
+                        song_done.store(false, Ordering::Relaxed);
+                        let tx = fetch_tx.clone();
+                        let vid = first.video_id.clone();
+                        tokio::spawn(async move {
+                            let result = fetch_audio_bytes(&vid, AudioQuality::Medium, cookies)
+                                .await
+                                .map_err(|e| e.to_string());
+                            tx.send(result).await.ok();
+                        });
+                    } else {
+                        tracing::warn!("auto-queue: empty suggestions, stopping playback");
+                        radio.write_channel(DataChannel::Player).player.is_playing = false;
+                    }
+                } else if !songs.is_empty() {
+                    let current_id = radio.read().player.current_video_id.clone();
+                    let first_id = songs.first().map(|s| s.video_id.clone()).unwrap_or_default();
+                    tracing::debug!(current_id, first_id, count = songs.len(), "initial suggestions arrived — checking guard");
+                    if first_id == current_id {
+                        info!(count = songs.len(), "initial suggestions set as queue");
+                        radio.write_channel(DataChannel::Player).player.queue = songs;
+                    } else {
+                        tracing::warn!(current_id, first_id, "initial suggestions discarded — video_id mismatch");
+                    }
+                }
+            }
             _ = progress_ticker.tick() => {
                 let (current, total) = progress
                     .lock()
@@ -189,7 +236,6 @@ pub async fn run_audio_engine(
                     state.player.total_secs = total;
                 }
 
-                // Auto-advance when the current source signals completion.
                 if song_done.load(Ordering::Relaxed) {
                     song_done.store(false, Ordering::Relaxed);
 
@@ -198,6 +244,7 @@ pub async fn run_audio_engine(
                         (p.queue.clone(), p.queue_index)
                     };
 
+                    tracing::debug!(queue_len = queue.len(), idx, "song done — checking auto-advance");
                     let next_idx = idx + 1;
                     if next_idx < queue.len() {
                         let next = queue[next_idx].clone();
@@ -239,9 +286,39 @@ pub async fn run_audio_engine(
                             tx.send(result).await.ok();
                         });
                     } else {
-                        // End of queue — mark as stopped.
-                        info!(idx, "queue exhausted, stopping playback");
-                        radio.write_channel(DataChannel::Player).player.is_playing = false;
+                        // Queue exhausted — fetch suggestions to continue.
+                        let current_id = radio.read().player.current_video_id.clone();
+                        let yt = radio.read().yt_session.clone();
+                        if let Some(yt) = yt {
+                            info!(idx, current_id, "queue exhausted — fetching suggestions");
+                            fetching_next = true;
+                            let tx = queue_tx.clone();
+                            tokio::spawn(async move {
+                                match yt.next_radio(&current_id).await {
+                                    Ok(page) => {
+                                        // Skip the finished song if it appears as items[0].
+                                        let skip = page.items.first()
+                                            .map(|i| i.song.id == current_id)
+                                            .unwrap_or(false) as usize;
+                                        let songs: Vec<QueueSong> = page.items.iter().skip(skip).map(|i| QueueSong {
+                                            video_id: i.song.id.clone(),
+                                            title: i.song.title.clone(),
+                                            artist: i.song.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                                            album: i.song.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+                                            thumbnail_url: i.song.thumbnail.clone().unwrap_or_default(),
+                                        }).collect();
+                                        tx.send(songs).await.ok();
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, "auto-queue suggestions failed");
+                                        tx.send(Vec::new()).await.ok();
+                                    }
+                                }
+                            });
+                        } else {
+                            info!(idx, "queue exhausted, stopping playback");
+                            radio.write_channel(DataChannel::Player).player.is_playing = false;
+                        }
                     }
                 }
             }
@@ -254,6 +331,7 @@ async fn handle_command(
     rodio_tx: &std::sync::mpsc::Sender<RodioCmd>,
     radio: &mut RadioStation<Data, DataChannel>,
     fetch_tx: &mpsc::Sender<Result<AudioRaw, String>>,
+    queue_tx: &mpsc::Sender<Vec<QueueSong>>,
     song_done: &Arc<AtomicBool>,
 ) {
     match cmd {
@@ -266,30 +344,76 @@ async fn handle_command(
             thumbnail_url,
         } => {
             let cookies = radio.read().cookie_header.clone();
+            let yt = radio.read().yt_session.clone();
             song_done.store(false, Ordering::Relaxed);
 
             {
                 let mut state = radio.write_channel(DataChannel::Player);
                 let p = &mut state.player;
-                p.title = title;
-                p.artist = artist;
-                p.album = album;
-                p.thumbnail_url = thumbnail_url;
+                p.title = title.clone();
+                p.artist = artist.clone();
+                p.album = album.clone();
+                p.thumbnail_url = thumbnail_url.clone();
                 p.current_secs = 0.;
                 p.is_playing = true;
                 p.current_video_id = video_id.clone();
-                // Single-song play clears the queue so auto-advance is a no-op.
-                p.queue.clear();
+                // Seed queue with just this song; suggestions arrive shortly via queue_rx.
+                p.queue = vec![QueueSong {
+                    video_id: video_id.clone(),
+                    title: title.clone(),
+                    artist: artist.clone(),
+                    album: album.clone(),
+                    thumbnail_url: thumbnail_url.clone(),
+                }];
                 p.queue_index = 0;
             }
 
             let tx = fetch_tx.clone();
+            let vid = video_id.clone();
             tokio::spawn(async move {
-                let result = fetch_audio_bytes(&video_id, quality, cookies)
+                let result = fetch_audio_bytes(&vid, quality, cookies)
                     .await
                     .map_err(|e| e.to_string());
                 tx.send(result).await.ok();
             });
+
+            // Fetch suggestions to populate the queue behind the current song.
+            if let Some(yt) = yt {
+                info!(video_id, "fetching initial suggestions");
+                let qtx = queue_tx.clone();
+                let current = QueueSong {
+                    video_id: video_id.clone(),
+                    title,
+                    artist,
+                    album,
+                    thumbnail_url,
+                };
+                tokio::spawn(async move {
+                    match yt.next_radio(&video_id).await {
+                        Ok(page) => {
+                            // next_radio returns the seed video as items[0] when using
+                            // a playlist-backed queue; skip it to avoid duplicating the
+                            // currently-playing song.
+                            let skip = page.items.first()
+                                .map(|i| i.song.id == video_id)
+                                .unwrap_or(false) as usize;
+                            info!(total_items = page.items.len(), skip, "initial suggestions received");
+                            let mut songs = vec![current];
+                            songs.extend(page.items.iter().skip(skip).map(|i| QueueSong {
+                                video_id: i.song.id.clone(),
+                                title: i.song.title.clone(),
+                                artist: i.song.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                                album: i.song.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+                                thumbnail_url: i.song.thumbnail.clone().unwrap_or_default(),
+                            }));
+                            qtx.send(songs).await.ok();
+                        }
+                        Err(e) => tracing::warn!(error = %e, "initial suggestions fetch failed"),
+                    }
+                });
+            } else {
+                tracing::warn!("no yt_session — cannot fetch suggestions");
+            }
         }
 
         AudioCommand::PlayFromQueue { songs, index, quality } => {

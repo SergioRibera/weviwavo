@@ -6,7 +6,7 @@ use ytdroid::YouTube;
 use ytdroid::filters::browse_id;
 use ytdroid::models::YTItem;
 
-use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData};
+use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData, QueueSong};
 use crate::audio::{AudioCommand, AudioEngine, AudioQuality, run_audio_engine};
 
 pub async fn run_startup(mut radio: RadioStation<Data, DataChannel>) {
@@ -163,10 +163,17 @@ async fn run_nav_engine(
                             )
                             .await;
 
-                        let suggestions = next_page
-                            .as_ref()
-                            .map(|p| p.items.iter().map(|i| i.song.clone()).collect::<Vec<_>>())
-                            .unwrap_or_default();
+                        let suggestions = match &next_page {
+                            Ok(p) => {
+                                let items: Vec<_> = p.items.iter().map(|i| i.song.clone()).collect();
+                                tracing::debug!(count = items.len(), "suggestions loaded");
+                                items
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "next endpoint failed — no suggestions");
+                                Vec::new()
+                            }
+                        };
 
                         // Related playlists from the "Related" tab browse endpoint.
                         let related_playlists = next_page
@@ -215,22 +222,18 @@ async fn run_nav_engine(
 
                 match yt.playlist(&browse_id).await {
                     Ok(page) => {
-                        if let Some(first) = page.songs.first() {
-                            tx.try_send(AudioCommand::Play {
-                                video_id: first.id.clone(),
+                        if !page.songs.is_empty() {
+                            let songs: Vec<QueueSong> = page.songs.iter().map(|s| QueueSong {
+                                video_id: s.id.clone(),
+                                title: s.title.clone(),
+                                artist: s.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
+                                album: s.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
+                                thumbnail_url: s.thumbnail.clone().unwrap_or_default(),
+                            }).collect();
+                            tx.try_send(AudioCommand::PlayFromQueue {
+                                songs,
+                                index: 0,
                                 quality: AudioQuality::Medium,
-                                title: first.title.clone(),
-                                artist: first
-                                    .artists
-                                    .first()
-                                    .map(|a| a.name.clone())
-                                    .unwrap_or_default(),
-                                album: first
-                                    .album
-                                    .as_ref()
-                                    .map(|a| a.name.clone())
-                                    .unwrap_or_default(),
-                                thumbnail_url: first.thumbnail.clone().unwrap_or_default(),
                             })
                             .ok();
                         }

@@ -95,7 +95,7 @@ use crate::pages::{
     explore::{ChartsPage, ExplorePage, MoodAndGenresPage, NewReleasesPage},
     home::HomePage,
     library::{LibraryContinuationPage, LibraryPage},
-    next::{NextContinuationPage, NextPage},
+    next::{AutomixEndpoint, NextContinuationPage, NextPage},
     playlist::{PlaylistContinuationPage, PlaylistPage},
     related::RelatedPage,
     search::{SearchContinuationPage, SearchPage, SearchSummaryPage},
@@ -757,6 +757,37 @@ impl YouTube {
             )
             .await?;
         Ok(NextPage::from_continuation(&raw))
+    }
+
+    /// Fetch a personalized up-next radio queue for `video_id`.
+    ///
+    /// YouTube Music returns an `automixPreviewVideoRenderer` when calling
+    /// `next(videoId, None)`.  This method detects that case and follows the
+    /// embedded endpoint to get the real personalized queue.
+    ///
+    /// # Errors
+    ///
+    /// Propagates HTTP and parsing errors from either `next` call.
+    #[instrument(skip(self))]
+    pub async fn next_radio(&self, video_id: &str) -> Result<NextPage> {
+        let first = self.next(Some(video_id), None, None, None, None).await?;
+
+        // YouTube returns the seed video + an automixPreviewVideoRenderer placeholder.
+        // Always follow the automix endpoint when present — it gives the real personalized queue.
+        if let Some(AutomixEndpoint { video_id: vid, playlist_id, params }) = first.automix_endpoint {
+            let page = self
+                .next(
+                    vid.as_deref().or(Some(video_id)),
+                    playlist_id.as_deref(),
+                    params.as_deref(),
+                    None,
+                    None,
+                )
+                .await?;
+            return Ok(page);
+        }
+
+        Ok(first)
     }
 
     /// Fetch the "Related" browse page for a given browse ID (from `NextPage::related_browse_id`).
