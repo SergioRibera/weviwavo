@@ -198,6 +198,7 @@ pub async fn run_audio_engine(
                             p.current_secs = 0.;
                             p.is_playing = true;
                             p.current_video_id = first.video_id.clone();
+                            p.current_like_status = first.like_status.clone();
                         }
                         rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
                         song_done.store(false, Ordering::Relaxed);
@@ -219,7 +220,10 @@ pub async fn run_audio_engine(
                     tracing::debug!(current_id, first_id, count = songs.len(), "initial suggestions arrived — checking guard");
                     if first_id == current_id {
                         info!(count = songs.len(), "initial suggestions set as queue");
-                        radio.write_channel(DataChannel::Player).player.queue = songs;
+                        let like = songs.first().and_then(|s| s.like_status.clone());
+                        let mut s = radio.write_channel(DataChannel::Player);
+                        s.player.queue = songs;
+                        s.player.current_like_status = like;
                     } else {
                         tracing::warn!(current_id, first_id, "initial suggestions discarded — video_id mismatch");
                     }
@@ -269,6 +273,7 @@ pub async fn run_audio_engine(
                             p.current_secs = 0.;
                             p.is_playing = true;
                             p.current_video_id = next.video_id.clone();
+                            p.current_like_status = next.like_status.clone();
                         }
 
                         rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
@@ -306,6 +311,7 @@ pub async fn run_audio_engine(
                                             artist: i.song.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                                             album: i.song.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
                                             thumbnail_url: i.song.thumbnail.clone().unwrap_or_default(),
+                                            like_status: i.song.like_status.clone(),
                                         }).collect();
                                         tx.send(songs).await.ok();
                                     }
@@ -364,8 +370,10 @@ async fn handle_command(
                     artist: artist.clone(),
                     album: album.clone(),
                     thumbnail_url: thumbnail_url.clone(),
+                    like_status: None,
                 }];
                 p.queue_index = 0;
+                p.current_like_status = None;
             }
 
             let tx = fetch_tx.clone();
@@ -387,6 +395,7 @@ async fn handle_command(
                     artist,
                     album,
                     thumbnail_url,
+                    like_status: None,
                 };
                 tokio::spawn(async move {
                     match yt.next_radio(&video_id).await {
@@ -405,6 +414,7 @@ async fn handle_command(
                                 artist: i.song.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                                 album: i.song.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
                                 thumbnail_url: i.song.thumbnail.clone().unwrap_or_default(),
+                                like_status: i.song.like_status.clone(),
                             }));
                             qtx.send(songs).await.ok();
                         }
@@ -437,6 +447,7 @@ async fn handle_command(
                 p.current_secs = 0.;
                 p.is_playing = true;
                 p.current_video_id = song.video_id.clone();
+                p.current_like_status = song.like_status.clone();
             }
 
             let tx = fetch_tx.clone();
@@ -471,6 +482,7 @@ async fn handle_command(
                     p.current_secs = 0.;
                     p.is_playing = true;
                     p.current_video_id = song.video_id.clone();
+                    p.current_like_status = song.like_status.clone();
                 }
 
                 let tx = fetch_tx.clone();

@@ -1,6 +1,6 @@
 use freya::radio::RadioChannel;
 use tokio::sync::mpsc;
-use ytdroid::models::{PlaylistItem, SongItem};
+use ytdroid::models::{LikeStatus, PlaylistItem, SongItem};
 use ytdroid::pages::home::HomePage;
 use ytdroid::YouTube;
 
@@ -14,6 +14,7 @@ pub struct QueueSong {
     pub artist: String,
     pub album: String,
     pub thumbnail_url: String,
+    pub like_status: Option<LikeStatus>,
 }
 
 /// Commands for the background data-loading task.
@@ -51,6 +52,7 @@ pub struct PlayerState {
     pub queue: Vec<QueueSong>,
     pub queue_index: usize,
     pub current_video_id: String,
+    pub current_like_status: Option<LikeStatus>,
 }
 
 impl Default for PlayerState {
@@ -68,6 +70,7 @@ impl Default for PlayerState {
             queue: Vec::new(),
             queue_index: 0,
             current_video_id: String::new(),
+            current_like_status: None,
         }
     }
 }

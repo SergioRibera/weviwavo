@@ -308,6 +308,7 @@ fn render_header(
                                     artist: s.artists.first().map(|a| a.name.clone()).unwrap_or_default(),
                                     album: s.album.as_ref().map(|a| a.name.clone()).unwrap_or_default(),
                                     thumbnail_url: s.thumbnail.clone().unwrap_or_default(),
+                                    like_status: s.like_status.clone(),
                                 }).collect();
                                 tx.try_send(AudioCommand::PlayFromQueue {
                                     songs: queue,

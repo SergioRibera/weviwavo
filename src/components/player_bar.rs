@@ -6,6 +6,8 @@ use freya::icons::lucide::{
 use freya::prelude::*;
 use freya::radio::use_radio;
 
+use ytdroid::models::LikeStatus;
+
 use super::use_cached_thumbnail;
 use crate::app::{Data, DataChannel};
 use crate::audio::AudioCommand;
@@ -46,6 +48,7 @@ impl ContainerExt for PlayerBar {}
 impl Component for PlayerBar {
     fn render(&self) -> impl IntoElement {
         let radio = use_radio::<Data, DataChannel>(DataChannel::Player);
+        let yt_radio = use_radio::<Data, DataChannel>(DataChannel::YtApi);
         let state = radio.read();
         let p = &state.player;
 
@@ -58,7 +61,11 @@ impl Component for PlayerBar {
         let year = p.year.clone();
         let thumbnail_url = p.thumbnail_url.clone();
         let volume = p.volume;
+        let current_video_id = p.current_video_id.clone();
+        let current_like_status = p.current_like_status.clone();
         let audio_cmd = state.audio_cmd.clone();
+        drop(state);
+        let yt_session = yt_radio.read().yt_session.clone();
 
         let mut is_muted = use_state(|| false);
         let thumb_src = use_cached_thumbnail(&thumbnail_url);
@@ -254,8 +261,68 @@ impl Component for PlayerBar {
                                             .text_overflow(TextOverflow::Ellipsis),
                                     ),
                             )
-                            .child(icon_btn(thumbs_up(), 18.))
-                            .child(icon_btn(thumbs_down(), 18.))
+                            .child({
+                                let is_liked = matches!(current_like_status, Some(LikeStatus::Like));
+                                let yt = yt_session.clone();
+                                let vid = current_video_id.clone();
+                                let radio_like = radio.clone();
+                                rect()
+                                    .center()
+                                    .padding(Gaps::new_all(6.))
+                                    .rounded_full()
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .on_press(move |_| {
+                                        let Some(yt) = yt.clone() else { return };
+                                        let v = vid.clone();
+                                        let mut r = radio_like.clone();
+                                        if is_liked {
+                                            r.write_channel(DataChannel::Player).player.current_like_status = Some(LikeStatus::Indifferent);
+                                            tokio::spawn(async move { yt.remove_like(&v).await.ok(); });
+                                        } else {
+                                            r.write_channel(DataChannel::Player).player.current_like_status = Some(LikeStatus::Like);
+                                            tokio::spawn(async move { yt.like_song(&v).await.ok(); });
+                                        }
+                                    })
+                                    .child(
+                                        SvgViewer::new(thumbs_up())
+                                            .color(if is_liked { Color::WHITE } else { Color::from_hex("#888888").unwrap() })
+                                            .fill(if is_liked { Color::WHITE } else { Color::TRANSPARENT })
+                                            .width(Size::px(18.))
+                                            .height(Size::px(18.)),
+                                    )
+                            })
+                            .child({
+                                let is_disliked = matches!(current_like_status, Some(LikeStatus::Dislike));
+                                let yt = yt_session.clone();
+                                let vid = current_video_id.clone();
+                                let radio_dislike = radio.clone();
+                                rect()
+                                    .center()
+                                    .padding(Gaps::new_all(6.))
+                                    .rounded_full()
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .on_press(move |_| {
+                                        let Some(yt) = yt.clone() else { return };
+                                        let v = vid.clone();
+                                        let mut r = radio_dislike.clone();
+                                        if is_disliked {
+                                            r.write_channel(DataChannel::Player).player.current_like_status = Some(LikeStatus::Indifferent);
+                                            tokio::spawn(async move { yt.remove_like(&v).await.ok(); });
+                                        } else {
+                                            r.write_channel(DataChannel::Player).player.current_like_status = Some(LikeStatus::Dislike);
+                                            tokio::spawn(async move { yt.dislike_song(&v).await.ok(); });
+                                        }
+                                    })
+                                    .child(
+                                        SvgViewer::new(thumbs_down())
+                                            .color(if is_disliked { Color::WHITE } else { Color::from_hex("#888888").unwrap() })
+                                            .fill(if is_disliked { Color::WHITE } else { Color::TRANSPARENT })
+                                            .width(Size::px(18.))
+                                            .height(Size::px(18.)),
+                                    )
+                            })
                             .child(icon_btn(ellipsis_vertical(), 18.)),
                     )
                     // right: volume, repeat, shuffle, expand
