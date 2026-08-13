@@ -389,7 +389,7 @@ async fn handle_command(
             if let Some(yt) = yt {
                 info!(video_id, "fetching initial suggestions");
                 let qtx = queue_tx.clone();
-                let current = QueueSong {
+                let mut current = QueueSong {
                     video_id: video_id.clone(),
                     title,
                     artist,
@@ -403,9 +403,13 @@ async fn handle_command(
                             // next_radio returns the seed video as items[0] when using
                             // a playlist-backed queue; skip it to avoid duplicating the
                             // currently-playing song.
-                            let skip = page.items.first()
-                                .map(|i| i.song.id == video_id)
-                                .unwrap_or(false) as usize;
+                            let seed = page.items.first().filter(|i| i.song.id == video_id);
+                            let skip = seed.is_some() as usize;
+                            // Grab the like_status for the seed from the response — it's parsed
+                            // from the menu, so it's accurate even if the Play command had None.
+                            if let Some(s) = seed {
+                                current.like_status = s.song.like_status.clone();
+                            }
                             info!(total_items = page.items.len(), skip, "initial suggestions received");
                             let mut songs = vec![current];
                             songs.extend(page.items.iter().skip(skip).map(|i| QueueSong {
