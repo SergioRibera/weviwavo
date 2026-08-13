@@ -1,6 +1,6 @@
 use freya::radio::RadioChannel;
 use tokio::sync::mpsc;
-use ytdroid::models::{LikeStatus, PlaylistItem, SongItem};
+use ytdroid::models::{AlbumItem, LikeStatus, PlaylistItem, SongItem};
 use ytdroid::pages::home::HomePage;
 use ytdroid::YouTube;
 
@@ -28,6 +28,14 @@ pub enum NavCommand {
     PlayPlaylist(String),
     /// Clear `pending_playlist_id` after the route push has been dispatched.
     ClearPending,
+    /// Fetch album metadata + songs and write them to `Data::album_view`.
+    LoadAlbum(String),
+}
+
+#[derive(Clone)]
+pub struct AlbumViewData {
+    pub album: AlbumItem,
+    pub songs: Vec<SongItem>,
 }
 
 #[derive(Clone)]
@@ -86,6 +94,7 @@ pub struct Data {
     pub audio_cmd: Option<mpsc::Sender<AudioCommand>>,
     pub nav_cmd: Option<mpsc::Sender<NavCommand>>,
     pub playlist_view: Option<PlaylistViewData>,
+    pub album_view: Option<AlbumViewData>,
     /// True while a playlist fetch is in progress.
     pub is_loading: bool,
     /// Browse ID of the playlist navigation that's pending data.

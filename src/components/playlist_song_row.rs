@@ -21,19 +21,26 @@ pub struct PlaylistSongRow {
     /// When true, the row belongs to the Suggestions section — queue is built
     /// from `playlist_view.suggestions` instead of `playlist_view.songs`.
     pub is_suggestion: bool,
-    /// Index of this song in the current playlist queue (ignored for suggestions).
+    /// When true, queue is built from `album_view.songs`.
+    pub is_album: bool,
+    /// Index of this song in the current queue.
     pub queue_index: usize,
 }
 
 impl PlaylistSongRow {
     #[must_use]
     pub fn song(song: SongItem, queue_index: usize) -> Self {
-        Self { song, is_suggestion: false, queue_index }
+        Self { song, is_suggestion: false, is_album: false, queue_index }
     }
 
     #[must_use]
     pub fn suggestion(song: SongItem, index: usize) -> Self {
-        Self { song, is_suggestion: true, queue_index: index }
+        Self { song, is_suggestion: true, is_album: false, queue_index: index }
+    }
+
+    #[must_use]
+    pub fn album(song: SongItem, index: usize) -> Self {
+        Self { song, is_suggestion: false, is_album: true, queue_index: index }
     }
 }
 
@@ -56,7 +63,14 @@ impl Component for PlaylistSongRow {
         let audio_cmd = audio_radio.read().audio_cmd.clone();
         let yt_session = yt_radio.read().yt_session.clone();
 
-        let songs_source = if self.is_suggestion {
+        let songs_source = if self.is_album {
+            nav_radio
+                .read()
+                .album_view
+                .as_ref()
+                .map(|av| av.songs.clone())
+                .unwrap_or_default()
+        } else if self.is_suggestion {
             nav_radio
                 .read()
                 .playlist_view

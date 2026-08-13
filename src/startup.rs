@@ -6,7 +6,7 @@ use ytdroid::YouTube;
 use ytdroid::filters::browse_id;
 use ytdroid::models::YTItem;
 
-use crate::app::{Data, DataChannel, NavCommand, PlaylistViewData, QueueSong};
+use crate::app::{AlbumViewData, Data, DataChannel, NavCommand, PlaylistViewData, QueueSong};
 use crate::audio::{AudioCommand, AudioEngine, AudioQuality, run_audio_engine};
 
 pub async fn run_startup(mut radio: RadioStation<Data, DataChannel>) {
@@ -241,6 +241,28 @@ async fn run_nav_engine(
                     }
                     Err(e) => {
                         tracing::error!(error = %e, browse_id, "failed to fetch playlist for playback");
+                    }
+                }
+            }
+
+            NavCommand::LoadAlbum(browse_id) => {
+                let yt = radio.read().yt_session.clone();
+                let Some(yt) = yt else {
+                    tracing::warn!(browse_id, "no YT session for album load");
+                    continue;
+                };
+
+                match yt.album(&browse_id).await {
+                    Ok(mut page) => {
+                        page.album.id = browse_id.clone();
+                        radio.write_channel(DataChannel::Navigation).album_view =
+                            Some(AlbumViewData {
+                                album: page.album,
+                                songs: page.songs,
+                            });
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, browse_id, "failed to fetch album");
                     }
                 }
             }
