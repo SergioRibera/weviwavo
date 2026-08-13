@@ -171,13 +171,14 @@ fn render_content(
                 .vertical()
                 .width(if is_wide { Size::flex(1.) } else { Size::Fill })
                 .spacing(2.)
-                .children(
+                .children({
+                    let ac = audio_cmd.clone();
                     songs
                         .iter()
                         .enumerate()
-                        .map(|(i, s)| PlaylistSongRow::song(s.clone(), i))
-                        .map(IntoElement::into_element),
-                )
+                        .map(move |(i, s)| PlaylistSongRow::song(s.clone(), i, ac.clone()))
+                        .map(IntoElement::into_element)
+                })
                 .maybe_child((!suggestions.is_empty()).then_some(
                     rect()
                         .vertical()
@@ -191,13 +192,14 @@ fn render_content(
                                 .font_size(20.)
                                 .color(Color::WHITE),
                         )
-                        .children(
+                        .children({
+                            let ac = audio_cmd.clone();
                             suggestions
                                 .iter()
                                 .enumerate()
-                                .map(|(i, s)| PlaylistSongRow::suggestion(s.clone(), i))
-                                .map(IntoElement::into_element),
-                        ),
+                                .map(move |(i, s)| PlaylistSongRow::suggestion(s.clone(), i, ac.clone()))
+                                .map(IntoElement::into_element)
+                        }),
                 ))
                 .maybe_child((!related_playlists.is_empty()).then_some(
                     rect()

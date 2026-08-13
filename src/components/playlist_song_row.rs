@@ -15,7 +15,7 @@ fn fmt_duration(secs: u32) -> String {
     format!("{m}:{s:02}")
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct PlaylistSongRow {
     pub song: SongItem,
     /// When true, the row belongs to the Suggestions section — queue is built
@@ -25,22 +25,45 @@ pub struct PlaylistSongRow {
     pub is_album: bool,
     /// Index of this song in the current queue.
     pub queue_index: usize,
+    /// Passed from the parent so this component doesn't subscribe to DataChannel::Player.
+    pub audio_cmd: Option<tokio::sync::mpsc::Sender<AudioCommand>>,
+}
+
+impl PartialEq for PlaylistSongRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.song == other.song
+            && self.is_suggestion == other.is_suggestion
+            && self.is_album == other.is_album
+            && self.queue_index == other.queue_index
+    }
 }
 
 impl PlaylistSongRow {
     #[must_use]
-    pub fn song(song: SongItem, queue_index: usize) -> Self {
-        Self { song, is_suggestion: false, is_album: false, queue_index }
+    pub fn song(
+        song: SongItem,
+        queue_index: usize,
+        audio_cmd: Option<tokio::sync::mpsc::Sender<AudioCommand>>,
+    ) -> Self {
+        Self { song, is_suggestion: false, is_album: false, queue_index, audio_cmd }
     }
 
     #[must_use]
-    pub fn suggestion(song: SongItem, index: usize) -> Self {
-        Self { song, is_suggestion: true, is_album: false, queue_index: index }
+    pub fn suggestion(
+        song: SongItem,
+        index: usize,
+        audio_cmd: Option<tokio::sync::mpsc::Sender<AudioCommand>>,
+    ) -> Self {
+        Self { song, is_suggestion: true, is_album: false, queue_index: index, audio_cmd }
     }
 
     #[must_use]
-    pub fn album(song: SongItem, index: usize) -> Self {
-        Self { song, is_suggestion: false, is_album: true, queue_index: index }
+    pub fn album(
+        song: SongItem,
+        index: usize,
+        audio_cmd: Option<tokio::sync::mpsc::Sender<AudioCommand>>,
+    ) -> Self {
+        Self { song, is_suggestion: false, is_album: true, queue_index: index, audio_cmd }
     }
 }
 
@@ -48,7 +71,6 @@ impl Component for PlaylistSongRow {
     #[allow(clippy::too_many_lines)] // row layout is inherently wide
     fn render(&self) -> impl IntoElement {
         // ── hooks — all at the top ────────────────────────────────────────────
-        let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
         let yt_radio = use_radio::<Data, DataChannel>(DataChannel::YtApi);
         let router = RouterContext::get();
@@ -60,7 +82,7 @@ impl Component for PlaylistSongRow {
         let thumb_src = use_cached_thumbnail(self.song.thumbnail.as_deref().unwrap_or(""));
 
         // ── data extraction ───────────────────────────────────────────────────
-        let audio_cmd = audio_radio.read().audio_cmd.clone();
+        let audio_cmd = self.audio_cmd.clone();
         let yt_session = yt_radio.read().yt_session.clone();
 
         let songs_source = if self.is_album {

@@ -54,6 +54,7 @@ impl Component for Album {
 
         let av = loaded.unwrap();
 
+        let ac = audio_cmd.clone();
         rect()
             .vertical()
             .expanded()
@@ -64,8 +65,8 @@ impl Component for Album {
                     .width(Size::Fill)
                     .height(Size::flex(1.0))
                     .child(
-                        VirtualScrollView::new_with_data(av.songs.clone(), |i, songs| {
-                            PlaylistSongRow::album(songs[i].clone(), i).into_element()
+                        VirtualScrollView::new_with_data(av.songs.clone(), move |i, songs| {
+                            PlaylistSongRow::album(songs[i].clone(), i, ac.clone()).into_element()
                         })
                         .length(av.songs.len())
                         .item_size(ROW_HEIGHT),
