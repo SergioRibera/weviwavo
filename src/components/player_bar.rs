@@ -3,6 +3,7 @@ use freya::icons::lucide::{
     chevron_up, ellipsis_vertical, pause, play, repeat, shuffle, skip_back, skip_forward,
     thumbs_down, thumbs_up, volume_2, volume_x,
 };
+use freya::animation::*;
 use freya::prelude::*;
 use freya::radio::use_radio;
 
@@ -70,6 +71,17 @@ impl Component for PlayerBar {
         let mut is_muted = use_state(|| false);
         let thumb_src = use_cached_thumbnail(&thumbnail_url);
 
+        // slide-up entry animation: runs once when the bar first mounts
+        const BAR_HEIGHT: f32 = 67.; // 3px seekbar + 64px main row
+        let entry_anim = use_animation(|conf| {
+            conf.on_creation(OnCreation::Run);
+            AnimNum::new(BAR_HEIGHT, 0.)
+                .function(Function::Sine)
+                .ease(Ease::Out)
+                .time(350)
+        });
+        let slide = entry_anim.get().value();
+
         let display_vol_pct = (if *is_muted.read() { 0.0 } else { volume }) * 100.0;
 
         let seekbar_width = Platform::get().root_size.read().width;
@@ -90,8 +102,15 @@ impl Component for PlayerBar {
             parts.join(" • ")
         };
 
+        // outer clip container — hides content that's below the bottom edge during slide-up
+        rect()
+            .height(Size::px(BAR_HEIGHT))
+            .width(Size::window_percent(100.))
+            .overflow(Overflow::Clip)
+            .child(
         rect()
             .vertical()
+            .offset_y(slide)   // starts at BAR_HEIGHT (hidden below), eases to 0
             .width(Size::window_percent(100.))
             .background(Color::from_hex("#0F0F0F").unwrap())
             // seek bar
@@ -396,5 +415,6 @@ impl Component for PlayerBar {
                             .child(icon_btn(chevron_up(), 18.)),
                     ),
             )
+            ) // closes outer clip container .child(inner rect)
     }
 }
