@@ -157,6 +157,13 @@ impl Component for FeedListRow {
     }
 }
 
+fn ytitem_card_width(item: &YTItem) -> f32 {
+    match item {
+        YTItem::Song(s) if s.is_video_song() => 402.,
+        _ => 223.,
+    }
+}
+
 // ── Section ───────────────────────────────────────────────────────────────────
 
 #[derive(PartialEq)]
@@ -201,33 +208,48 @@ impl Component for Section {
 
         // Freya stores scroll as negative offsets: 0 = start, -N = scrolled N px right.
         let (current_x, _): (i32, i32) = scroll_controller.into();
-        let can_scroll_left = current_x < 0;
 
         let is_list = matches!(
             self.home.layout,
             HomeSectionLayout::List | HomeSectionLayout::Grid
         );
 
-        // col_width for List: each column is wide enough for a song row.
-        let col_width: f32 = 420.;
-        let list_scroll_amount = (col_width as i32) + 20;
-        let list_col_count = self.items.len().div_ceil(4) as i32;
+        // ── Pixel-accurate scroll geometry ────────────────────────────────────
+        const SPACING: f32 = 20.;
+        const COL_WIDTH: f32 = 420.;
 
-        let (scroll_amount, can_scroll_right) = if is_list {
-            let overflow = (list_col_count * list_scroll_amount)
-                .saturating_sub(list_scroll_amount * 3);
-            (list_scroll_amount, current_x > -overflow && list_col_count > 3)
+        let window_w = Platform::get().root_size.read().width;
+        let visible_w = window_w * (max_width / 100.0);
+
+        let (scroll_amount, max_overflow) = if is_list {
+            let col_count = self.items.len().div_ceil(4);
+            let total_w = col_count as f32 * (COL_WIDTH + SPACING) - SPACING;
+            let overflow = (total_w - visible_w).max(0.) as i32;
+            let amount = (3. * (COL_WIDTH + SPACING)) as i32;
+            (amount, overflow)
         } else {
-            let amount = 270i32; // 250 (card) + 20 (gap)
-            let overflow =
-                (self.items.len() as i32 * amount).saturating_sub(amount * 4);
-            (amount, current_x > -overflow && self.items.len() > 4)
+            let widths: Vec<f32> = self.items.iter().map(ytitem_card_width).collect();
+            let total_w = widths.iter().sum::<f32>()
+                + SPACING * widths.len().saturating_sub(1) as f32;
+            let overflow = (total_w - visible_w).max(0.) as i32;
+            let avg_w = if widths.is_empty() {
+                223.
+            } else {
+                widths.iter().sum::<f32>() / widths.len() as f32
+            };
+            let amount = (3. * (avg_w + SPACING)) as i32;
+            (amount, overflow)
         };
+
+        let can_scroll_left = current_x < 0;
+        let can_scroll_right = current_x > -max_overflow && max_overflow > 0;
 
         tracing::trace!(
             section = %self.home.title.as_deref().unwrap_or(""),
             content_len = self.items.len(),
             current_x,
+            max_overflow,
+            scroll_amount,
             can_scroll_left,
             can_scroll_right,
             "section render"
@@ -286,7 +308,7 @@ impl Component for Section {
                     })
                     .into_element(),
                     scroll_button(ScrollDir::Right, can_scroll_right, move || {
-                        let target = current_x - scroll_amount;
+                        let target = (current_x - scroll_amount).max(-max_overflow);
                         scroll_controller.scroll_to_x(target);
                     })
                     .into_element(),
@@ -306,10 +328,10 @@ impl Component for Section {
                     rect()
                         .vertical()
                         .spacing(4.)
-                        .width(Size::px(col_width))
+                        .width(Size::px(COL_WIDTH))
                         .height(Size::Inner)
                         .children(chunk.iter().map(|item| {
-                            FeedListRow { item: item.clone(), col_width }
+                            FeedListRow { item: item.clone(), col_width: COL_WIDTH }
                                 .into_element()
                         }))
                         .into_element()
