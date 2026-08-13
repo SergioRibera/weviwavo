@@ -330,6 +330,8 @@ pub struct ToggleMenuServiceItemRenderer {
     pub toggled_service_endpoint: Option<ServiceEndpoint>,
     /// `true` when the user has already toggled this item (e.g. subscribed / saved).
     pub is_selected: Option<bool>,
+    /// `true` when the item is currently in the toggled state (used by like/dislike items).
+    pub is_toggled: Option<bool>,
 }
 
 /// Represents one item inside a `menuRenderer.items` list.
@@ -420,6 +422,30 @@ impl MenuRenderer {
             }
         }
         (None, None)
+    }
+
+    /// Extract like status from the FAVORITE / UNFAVORITE toggle item.
+    ///
+    /// Returns `Some(true)` = liked, `Some(false)` = not liked (indifferent), `None` = no like item.
+    #[must_use]
+    pub fn like_toggled(&self) -> Option<bool> {
+        for item in &self.items {
+            let Some(toggle) = &item.toggle_menu_service_item_renderer else {
+                continue;
+            };
+            let icon = toggle.default_icon.as_ref().and_then(|i| i.icon_type.as_deref()).unwrap_or("");
+            if icon == "FAVORITE" || icon == "UNFAVORITE" {
+                // FAVORITE = default action is "add like" → not yet liked
+                // UNFAVORITE = default action is "remove like" → already liked
+                let toggled = toggle.is_toggled.or(toggle.is_selected).unwrap_or(false);
+                if icon == "FAVORITE" {
+                    return Some(toggled);
+                } else {
+                    return Some(!toggled);
+                }
+            }
+        }
+        None
     }
 }
 

@@ -11,8 +11,8 @@ pub mod related;
 pub mod search;
 
 use crate::models::{
-    AlbumItem, AlbumRef, Artist, ArtistItem, EpisodeItem, PlaylistItem, PodcastItem, PodcastRef,
-    SongItem, YTItem,
+    AlbumItem, AlbumRef, Artist, ArtistItem, EpisodeItem, LikeStatus, PlaylistItem, PodcastItem,
+    PodcastRef, SongItem, YTItem,
 };
 use crate::response::common::{
     MusicMultiRowListItemRenderer, MusicResponsiveListItemRenderer, MusicTwoRowItemRenderer,
@@ -370,6 +370,12 @@ pub(crate) fn from_responsive(r: &MusicResponsiveListItemRenderer) -> Option<YTI
         let set_video_id = r.playlist_set_video_id.clone();
         let music_video_type = r.music_video_type().map(str::to_owned);
         let (library_add_token, library_remove_token) = r.library_tokens();
+        let like_status = r
+            .menu
+            .as_ref()
+            .and_then(|m| m.menu_renderer.as_ref())
+            .and_then(|mr| mr.like_toggled())
+            .map(|liked| if liked { LikeStatus::Like } else { LikeStatus::Indifferent });
         return Some(YTItem::Song(Box::new(SongItem {
             id,
             title,
@@ -379,7 +385,7 @@ pub(crate) fn from_responsive(r: &MusicResponsiveListItemRenderer) -> Option<YTI
             thumbnail,
             explicit,
             set_video_id,
-            like_status: None,
+            like_status,
             library_add_token,
             library_remove_token,
             music_video_type,

@@ -1,7 +1,7 @@
 //! Up-next / related tracks page returned by the `next` endpoint.
 
 use crate::error::{Error, Result};
-use crate::models::SongItem;
+use crate::models::{LikeStatus, SongItem};
 use crate::response::common::get_continuation;
 use crate::response::{NextContents, NextResponse, PlaylistPanelVideoRenderer, WatchNextTabbedResultsRenderer};
 use super::parse_duration;
@@ -248,6 +248,12 @@ fn video_to_next_item(video: &PlaylistPanelVideoRenderer) -> Option<NextItem> {
         .as_ref()
         .and_then(|e| e.watch_endpoint.as_ref())
         .and_then(|e| e.music_video_type().map(str::to_owned));
+    let like_status = video
+        .menu
+        .as_ref()
+        .and_then(|m| m.menu_renderer.as_ref())
+        .and_then(|mr| mr.like_toggled())
+        .map(|liked| if liked { LikeStatus::Like } else { LikeStatus::Indifferent });
     Some(NextItem {
         song: SongItem {
             id,
@@ -258,7 +264,7 @@ fn video_to_next_item(video: &PlaylistPanelVideoRenderer) -> Option<NextItem> {
             thumbnail,
             explicit: false,
             set_video_id: playlist_set_video_id.clone(),
-            like_status: None,
+            like_status,
             library_add_token: None,
             library_remove_token: None,
             music_video_type,

@@ -626,6 +626,7 @@ pub struct PlaylistPanelVideoRenderer {
     pub length_text: Option<common::Runs>,
     pub navigation_endpoint: Option<common::NavigationEndpoint>,
     pub playlist_set_video_id: Option<String>,
+    pub menu: Option<common::Menu>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

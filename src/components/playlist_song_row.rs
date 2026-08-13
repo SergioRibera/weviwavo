@@ -2,7 +2,7 @@ use freya::icons::lucide::{ellipsis_vertical, play, thumbs_down, thumbs_up};
 use freya::prelude::*;
 use freya::radio::use_radio;
 use freya::router::RouterContext;
-use ytdroid::models::SongItem;
+use ytdroid::models::{LikeStatus, SongItem};
 
 use super::use_cached_thumbnail;
 use crate::app::{Data, DataChannel, QueueSong, Route};
@@ -43,15 +43,18 @@ impl Component for PlaylistSongRow {
         // ── hooks — all at the top ────────────────────────────────────────────
         let audio_radio = use_radio::<Data, DataChannel>(DataChannel::Player);
         let nav_radio = use_radio::<Data, DataChannel>(DataChannel::Navigation);
+        let yt_radio = use_radio::<Data, DataChannel>(DataChannel::YtApi);
         let router = RouterContext::get();
         let mut hover = use_state(|| false);
         let mut thumb_hover = use_state(|| false);
         let mut artist_hover = use_state(|| false);
         let mut album_hover = use_state(|| false);
+        let mut like_status = use_state(|| self.song.like_status.clone());
         let thumb_src = use_cached_thumbnail(self.song.thumbnail.as_deref().unwrap_or(""));
 
         // ── data extraction ───────────────────────────────────────────────────
         let audio_cmd = audio_radio.read().audio_cmd.clone();
+        let yt_session = yt_radio.read().yt_session.clone();
 
         let songs_source = if self.is_suggestion {
             nav_radio
@@ -309,6 +312,18 @@ impl Component for PlaylistSongRow {
             )
             // ── Action buttons (visible on hover) ─────────────────────────────
             .maybe_child((*hover.read()).then(|| {
+                let is_liked = matches!(*like_status.read(), Some(LikeStatus::Like));
+                let is_disliked = matches!(*like_status.read(), Some(LikeStatus::Dislike));
+                let like_color = if is_liked { Color::WHITE } else { Color::from_hex("#B3B3B3").unwrap() };
+                let like_fill = if is_liked { Color::WHITE } else { Color::TRANSPARENT };
+                let dislike_color = if is_disliked { Color::WHITE } else { Color::from_hex("#B3B3B3").unwrap() };
+                let dislike_fill = if is_disliked { Color::WHITE } else { Color::TRANSPARENT };
+
+                let vid_like = video_id.clone();
+                let yt_like = yt_session.clone();
+                let vid_dislike = video_id.clone();
+                let yt_dislike = yt_session.clone();
+
                 rect()
                     .horizontal()
                     .spacing(4.)
@@ -323,10 +338,23 @@ impl Component for PlaylistSongRow {
                                 hover.set(true);
                             })
                             .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                            .on_press(move |_| {
+                                let Some(yt) = yt_like.clone() else { return };
+                                let current = like_status.read().clone();
+                                if matches!(current, Some(LikeStatus::Like)) {
+                                    like_status.set(Some(LikeStatus::Indifferent));
+                                    let vid = vid_like.clone();
+                                    tokio::spawn(async move { yt.remove_like(&vid).await.ok(); });
+                                } else {
+                                    like_status.set(Some(LikeStatus::Like));
+                                    let vid = vid_like.clone();
+                                    tokio::spawn(async move { yt.like_song(&vid).await.ok(); });
+                                }
+                            })
                             .child(
                                 SvgViewer::new(thumbs_up())
-                                    .color(Color::from_hex("#B3B3B3").unwrap())
-                                    .fill(Color::TRANSPARENT)
+                                    .color(like_color)
+                                    .fill(like_fill)
                                     .width(Size::px(15.))
                                     .height(Size::px(15.)),
                             ),
@@ -341,10 +369,23 @@ impl Component for PlaylistSongRow {
                                 hover.set(true);
                             })
                             .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                            .on_press(move |_| {
+                                let Some(yt) = yt_dislike.clone() else { return };
+                                let current = like_status.read().clone();
+                                if matches!(current, Some(LikeStatus::Dislike)) {
+                                    like_status.set(Some(LikeStatus::Indifferent));
+                                    let vid = vid_dislike.clone();
+                                    tokio::spawn(async move { yt.remove_like(&vid).await.ok(); });
+                                } else {
+                                    like_status.set(Some(LikeStatus::Dislike));
+                                    let vid = vid_dislike.clone();
+                                    tokio::spawn(async move { yt.dislike_song(&vid).await.ok(); });
+                                }
+                            })
                             .child(
                                 SvgViewer::new(thumbs_down())
-                                    .color(Color::from_hex("#B3B3B3").unwrap())
-                                    .fill(Color::TRANSPARENT)
+                                    .color(dislike_color)
+                                    .fill(dislike_fill)
                                     .width(Size::px(15.))
                                     .height(Size::px(15.)),
                             ),
