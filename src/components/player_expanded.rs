@@ -180,7 +180,7 @@ impl Component for PlayerExpanded {
         rect()
             .horizontal()
             .expanded()
-            .background(Color::from_hex("#111111").unwrap())
+            .background(Color::BLACK)
             // ── Left panel ────────────────────────────────────────────────────
             .child(
                 rect()
@@ -189,59 +189,6 @@ impl Component for PlayerExpanded {
                     .height(Size::Fill)
                     .padding(Gaps::new_all(40.))
                     .spacing(16.)
-                    // Tabs row
-                    .child(
-                        rect()
-                            .horizontal()
-                            .main_align(Alignment::Center)
-                            .spacing(8.)
-                            .child({
-                                let selected = *left_tab.read() == 0;
-                                rect()
-                                    .padding(Gaps::new_symmetric(8., 16.))
-                                    .corner_radius(20.)
-                                    .background(if selected {
-                                        Color::from_hex("#3D3D3D").unwrap()
-                                    } else {
-                                        Color::TRANSPARENT
-                                    })
-                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                                    .on_press(move |_| left_tab.set(0))
-                                    .child(
-                                        label()
-                                            .text("CANCIÓN")
-                                            .font_size(12.)
-                                            .font_weight(FontWeight::BOLD)
-                                            .color(Color::WHITE),
-                                    )
-                            })
-                            .child({
-                                let selected = *left_tab.read() == 1;
-                                rect()
-                                    .padding(Gaps::new_symmetric(8., 16.))
-                                    .corner_radius(20.)
-                                    .background(if selected {
-                                        Color::from_hex("#3D3D3D").unwrap()
-                                    } else {
-                                        Color::TRANSPARENT
-                                    })
-                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                                    .on_press(move |_| left_tab.set(1))
-                                    .child(
-                                        label()
-                                            .text("VÍDEO")
-                                            .font_size(12.)
-                                            .font_weight(FontWeight::BOLD)
-                                            .color(if selected {
-                                                Color::WHITE
-                                            } else {
-                                                Color::from_hex("#888888").unwrap()
-                                            }),
-                                    )
-                            }),
-                    )
                     // Album art
                     .child(
                         rect()

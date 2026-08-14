@@ -12,9 +12,9 @@ mod data;
 mod home;
 mod playlist;
 
-pub use data::*;
 use album::Album;
 use artist::Artist;
+pub use data::*;
 use home::Home;
 pub use playlist::Playlist;
 
@@ -75,7 +75,6 @@ impl Component for AppLayout {
         let bg_image = ("bg_image", include_bytes!("../resources/bg_default.webp"));
 
         let root_size = Platform::get().root_size.read();
-        let window_w = root_size.width;
         let window_h = root_size.height;
         drop(root_size);
         const HOMEBAR_H: f32 = 64.;
@@ -119,7 +118,11 @@ impl Component for AppLayout {
 
         let open = *sidebar_open.read();
         if open != *prev_open.read() {
-            if open { sidebar_anim.start() } else { sidebar_anim.reverse() }
+            if open {
+                sidebar_anim.start()
+            } else {
+                sidebar_anim.reverse()
+            }
             prev_open.set(open);
         }
         let sidebar_width = sidebar_anim.read().value();
@@ -128,17 +131,25 @@ impl Component for AppLayout {
             Rc::new(RefCell::new(move || sidebar_open.toggle()));
 
         // ── expand animation ──────────────────────────────────────────────
-        let expand_anim = use_animation_with_dependencies(&is_expanded, move |conf, &open| {
-            conf.on_change(OnChange::Rerun);
-            AnimNum::new(
-                if open { content_h } else { 0. },
-                if open { 0. } else { content_h },
-            )
-            .function(Function::Sine)
-            .ease(Ease::Out)
-            .time(350)
+        // Use the same pattern as the sidebar: use_animation + read().value() so that
+        // AppLayout subscribes to each animation frame and re-renders throughout.
+        let mut anim_prev_expanded = use_state(|| false);
+        let mut expand_anim = use_animation(|_| {
+            AnimNum::new(0_f32, 1_f32)
+                .function(Function::Sine)
+                .ease(Ease::Out)
+                .time(350)
         });
-        let expand_slide = expand_anim.get().value();
+        if is_expanded != *anim_prev_expanded.read() {
+            anim_prev_expanded.set(is_expanded);
+            if is_expanded {
+                expand_anim.start()
+            } else {
+                expand_anim.reverse()
+            }
+        }
+        let expand_progress = expand_anim.read().value(); // reactive: 0.0 → 1.0
+        let panel_h = expand_progress * content_h;
         let show_expanded = is_expanded || *expand_anim.is_running().read();
 
         // ── layout ────────────────────────────────────────────────────────
@@ -159,35 +170,43 @@ impl Component for AppLayout {
                     .horizontal()
                     .width(Size::Fill)
                     .height(Size::flex(1.0))
-                    .child(Sidebar { width: sidebar_width })
+                    .child(Sidebar {
+                        width: sidebar_width,
+                    })
                     .child(
-                        // Overflow::Clip clips the slide animation.
-                        // PlayerExpanded sits AFTER Outlet in DOM → paints on top.
                         rect()
                             .vertical()
                             .width(Size::flex(1.0))
                             .height(Size::Fill)
-                            .overflow(Overflow::Clip)
-                            .child(Outlet::<Route>::new())
-                            .maybe_child((show_expanded && has_player).then(|| {
-                                // Zero-height wrapper positioned at y=content_h (after Outlet).
-                                // offset_y shifts its child UP so it covers the Outlet.
-                                // slide = content_h (hidden) → 0 (open).
+                            .child(
                                 rect()
+                                    .vertical()
                                     .width(Size::Fill)
-                                    .height(Size::px(0.))
-                                    .offset_y(expand_slide - content_h)
-                                    .child(
+                                    .height(Size::flex(1.))
+                                    .child(Outlet::<Route>::new())
+                                    .maybe_child((show_expanded && has_player).then(|| {
+                                        // Layer::Overlay paints on top of Outlet.
+                                        // overflow:clip hides the panel below the boundary during animation.
+                                        // Inner rect's offset_y slides it from y=content_h → y=0.
                                         rect()
                                             .width(Size::Fill)
                                             .height(Size::px(content_h))
-                                            .child(PlayerExpanded::default()),
-                                    )
-                                    .into_element()
-                            })),
+                                            .layer(Layer::Overlay)
+                                            .overflow(Overflow::Clip)
+                                            .position(Position::new_absolute())
+                                            .child(
+                                                rect()
+                                                    .vertical()
+                                                    .width(Size::Fill)
+                                                    .height(Size::px(content_h))
+                                                    .offset_y(content_h * (1.0 - expand_progress))
+                                                    .child(PlayerExpanded::default()),
+                                            )
+                                            .into_element()
+                                    })),
+                            ),
                     ),
             )
             .maybe_child(has_player.then(PlayerBar::default))
     }
 }
-
