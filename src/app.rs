@@ -4,7 +4,7 @@ use std::rc::Rc;
 use freya::animation::*;
 use freya::{prelude::*, router::*};
 
-use crate::components::{HomeBar, LoadingBar, PlayerBar, Sidebar};
+use crate::components::{HomeBar, LoadingBar, PlayerBar, PlayerExpanded, Sidebar};
 
 mod album;
 mod artist;
@@ -71,8 +71,16 @@ impl Component for AppLayout {
         let mut route_pushed = use_state(|| false);
 
         let has_player = !player_radio.read().player.title.is_empty();
+        let is_expanded = player_radio.read().player_expanded;
         let bg_image = ("bg_image", include_bytes!("../resources/bg_default.webp"));
-        let platform = Platform::get().root_size;
+
+        let root_size = Platform::get().root_size.read();
+        let window_w = root_size.width;
+        let window_h = root_size.height;
+        drop(root_size);
+        const HOMEBAR_H: f32 = 64.;
+        const PLAYERBAR_H: f32 = 67.;
+        let content_h = (window_h - HOMEBAR_H - PLAYERBAR_H).max(0.);
 
         let nav_state = nav_radio.read();
         let is_loading = nav_state.is_loading;
@@ -119,6 +127,20 @@ impl Component for AppLayout {
         let on_toggle: Rc<RefCell<dyn FnMut()>> =
             Rc::new(RefCell::new(move || sidebar_open.toggle()));
 
+        // ── expand animation ──────────────────────────────────────────────
+        let expand_anim = use_animation_with_dependencies(&is_expanded, move |conf, &open| {
+            conf.on_change(OnChange::Rerun);
+            AnimNum::new(
+                if open { content_h } else { 0. },
+                if open { 0. } else { content_h },
+            )
+            .function(Function::Sine)
+            .ease(Ease::Out)
+            .time(350)
+        });
+        let expand_slide = expand_anim.get().value();
+        let show_expanded = is_expanded || *expand_anim.is_running().read();
+
         // ── layout ────────────────────────────────────────────────────────
         rect()
             .vertical()
@@ -146,6 +168,16 @@ impl Component for AppLayout {
                             .child(Outlet::<Route>::new()),
                     ),
             )
+            .maybe_child((show_expanded && has_player).then(|| {
+                rect()
+                    .position(Position::new_global())
+                    .offset_x(0.)
+                    .offset_y(HOMEBAR_H + expand_slide)
+                    .width(Size::px(window_w))
+                    .height(Size::px(content_h))
+                    .child(PlayerExpanded::default())
+                    .into_element()
+            }))
             .maybe_child(has_player.then(PlayerBar::default))
     }
 }

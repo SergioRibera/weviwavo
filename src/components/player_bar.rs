@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use freya::icons::lucide::{
-    chevron_up, ellipsis_vertical, pause, play, repeat, shuffle, skip_back, skip_forward,
-    thumbs_down, thumbs_up, volume_2, volume_x,
+    chevron_down, chevron_up, ellipsis_vertical, pause, play, repeat, shuffle, skip_back,
+    skip_forward, thumbs_down, thumbs_up, volume_2, volume_x,
 };
 use freya::animation::*;
 use freya::prelude::*;
@@ -65,6 +65,7 @@ impl Component for PlayerBar {
         let current_video_id = p.current_video_id.clone();
         let current_like_status = p.current_like_status.clone();
         let audio_cmd = state.audio_cmd.clone();
+        let is_expanded = state.player_expanded;
         drop(state);
         let yt_session = yt_radio.read().yt_session.clone();
 
@@ -238,7 +239,7 @@ impl Component for PlayerBar {
                                     .color(Color::from_hex("#AAAAAA").unwrap()),
                             ),
                     )
-                    // center: thumbnail + song info + reactions
+                    // center: thumbnail + song info + reactions (click to toggle expand)
                     .child(
                         rect()
                             .horizontal()
@@ -246,6 +247,14 @@ impl Component for PlayerBar {
                             .spacing(12.)
                             .cross_align(Alignment::Center)
                             .main_align(Alignment::Center)
+                            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                            .on_press({
+                                let mut rw2 = radio.clone();
+                                move |_| {
+                                    rw2.write_channel(DataChannel::Player).player_expanded ^= true;
+                                }
+                            })
                             .maybe_child(thumb_src.clone().map(|src| {
                                 rect()
                                     .width(Size::px(48.))
@@ -412,7 +421,28 @@ impl Component for PlayerBar {
                             })
                             .child(icon_btn(repeat(), 18.))
                             .child(icon_btn(shuffle(), 18.))
-                            .child(icon_btn(chevron_up(), 18.)),
+                            .child({
+                                let mut rw = radio.clone();
+                                rect()
+                                    .center()
+                                    .padding(Gaps::new_all(6.))
+                                    .rounded_full()
+                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                    .on_press(move |_| {
+                                        rw.write_channel(DataChannel::Player).player_expanded ^= true;
+                                    })
+                                    .child(
+                                        SvgViewer::new(if is_expanded {
+                                            chevron_down()
+                                        } else {
+                                            chevron_up()
+                                        })
+                                        .color(Color::WHITE)
+                                        .width(Size::px(18.))
+                                        .height(Size::px(18.)),
+                                    )
+                            }),
                     ),
             )
             ) // closes outer clip container .child(inner rect)

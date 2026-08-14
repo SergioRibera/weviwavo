@@ -99,6 +99,8 @@ pub struct Data {
     pub is_loading: bool,
     /// Browse ID of the playlist navigation that's pending data.
     pub pending_playlist_id: Option<String>,
+    /// Whether the expanded player panel is open.
+    pub player_expanded: bool,
 }
 
 #[derive(Default, PartialEq, Eq, Clone, Debug, Copy, Hash, PartialOrd, Ord)]
