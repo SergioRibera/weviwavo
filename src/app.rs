@@ -169,11 +169,13 @@ impl Component for AppLayout {
                     ),
             )
             .maybe_child((show_expanded && has_player).then(|| {
+                // Same physical region as the route content area (right of sidebar).
+                let content_w = window_w - sidebar_width;
                 rect()
                     .position(Position::new_global())
-                    .offset_x(0.)
+                    .offset_x(sidebar_width)
                     .offset_y(HOMEBAR_H + expand_slide)
-                    .width(Size::px(window_w))
+                    .width(Size::px(content_w))
                     .height(Size::px(content_h))
                     .child(PlayerExpanded::default())
                     .into_element()
