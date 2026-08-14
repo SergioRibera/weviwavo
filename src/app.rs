@@ -161,25 +161,32 @@ impl Component for AppLayout {
                     .height(Size::flex(1.0))
                     .child(Sidebar { width: sidebar_width })
                     .child(
+                        // Overflow::Clip clips the slide animation.
+                        // PlayerExpanded sits AFTER Outlet in DOM → paints on top.
                         rect()
                             .vertical()
                             .width(Size::flex(1.0))
                             .height(Size::Fill)
-                            .child(Outlet::<Route>::new()),
+                            .overflow(Overflow::Clip)
+                            .child(Outlet::<Route>::new())
+                            .maybe_child((show_expanded && has_player).then(|| {
+                                // Zero-height wrapper positioned at y=content_h (after Outlet).
+                                // offset_y shifts its child UP so it covers the Outlet.
+                                // slide = content_h (hidden) → 0 (open).
+                                rect()
+                                    .width(Size::Fill)
+                                    .height(Size::px(0.))
+                                    .offset_y(expand_slide - content_h)
+                                    .child(
+                                        rect()
+                                            .width(Size::Fill)
+                                            .height(Size::px(content_h))
+                                            .child(PlayerExpanded::default()),
+                                    )
+                                    .into_element()
+                            })),
                     ),
             )
-            .maybe_child((show_expanded && has_player).then(|| {
-                // Same physical region as the route content area (right of sidebar).
-                let content_w = window_w - sidebar_width;
-                rect()
-                    .position(Position::new_global())
-                    .offset_x(sidebar_width)
-                    .offset_y(HOMEBAR_H + expand_slide)
-                    .width(Size::px(content_w))
-                    .height(Size::px(content_h))
-                    .child(PlayerExpanded::default())
-                    .into_element()
-            }))
             .maybe_child(has_player.then(PlayerBar::default))
     }
 }
