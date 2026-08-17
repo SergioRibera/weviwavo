@@ -7,6 +7,7 @@ use freya::prelude::*;
 mod app;
 mod audio;
 mod auth;
+mod discord;
 mod components;
 
 pub use audio::nsig::{decrypt_sig, decrypt_url, signature_timestamp};

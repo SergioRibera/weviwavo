@@ -50,6 +50,7 @@ rand = "0.8"
 rquickjs = { version = "0.9", default-features = false }
 regex = "1"
 souvlaki = "0.8"
+discord-rich-presence = "0.2"
 
 [target.'cfg(target_os="android")'.dependencies]
 android-activity = { version = "0.6.0", features = ["native-activity"] }

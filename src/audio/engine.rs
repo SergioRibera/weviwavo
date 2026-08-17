@@ -11,6 +11,7 @@ use tracing::{error, info};
 use crate::app::{Data, DataChannel, QueueSong};
 use crate::audio::{AudioQuality, AudioRaw, youtube::fetch_audio_bytes};
 use crate::audio::media_controls::MediaBridge;
+use crate::discord::DiscordPresence;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -114,6 +115,51 @@ impl<S: Source> Source for CompletionNotifier<S> {
     }
 }
 
+// ── combined notifier ─────────────────────────────────────────────────────────
+
+/// Groups system media controls and Discord Rich Presence so call sites only
+/// need one handle.
+struct Notifiers {
+    media: MediaBridge,
+    discord: DiscordPresence,
+}
+
+impl Notifiers {
+    fn new(cmd_tx: mpsc::Sender<AudioCommand>) -> Self {
+        Self {
+            media: MediaBridge::new(cmd_tx),
+            discord: DiscordPresence::new(),
+        }
+    }
+
+    fn song_started(&mut self, title: &str, artist: &str, album: &str, cover_url: &str, video_id: &str) {
+        self.media.song_started(title, artist, album, cover_url);
+        self.discord.playing(title, artist, album, cover_url, video_id, 0.);
+    }
+
+    fn set_paused(&mut self, pos: f32, title: &str, artist: &str, album: &str, cover_url: &str, video_id: &str) {
+        self.media.set_paused(pos);
+        self.discord.paused(title, artist, album, cover_url, video_id);
+    }
+
+    fn set_playing(&mut self, pos: f32, title: &str, artist: &str, album: &str, cover_url: &str, video_id: &str) {
+        self.media.set_playing(pos);
+        self.discord.playing(title, artist, album, cover_url, video_id, pos);
+    }
+
+    fn set_stopped(&mut self) {
+        self.media.set_stopped();
+        self.discord.stopped();
+    }
+
+    fn update_duration(&mut self, title: &str, artist: &str, album: &str, cover_url: &str, duration: Duration) {
+        self.media.update_duration(title, artist, album, cover_url, duration);
+        // Discord tracks time via timestamp; no additional update needed.
+    }
+}
+
+// ── audio engine handle ───────────────────────────────────────────────────────
+
 /// Handle for sending commands to the audio engine.
 pub struct AudioEngine {
     tx: mpsc::Sender<AudioCommand>,
@@ -156,7 +202,7 @@ pub async fn run_audio_engine(
     // Last total_secs value pushed to the media bridge; reset to 0.0 on each new song.
     let mut last_reported_duration: f32 = 0.;
 
-    let mut bridge = MediaBridge::new(cmd_tx);
+    let mut n = Notifiers::new(cmd_tx);
 
     tokio::task::spawn_blocking(move || {
         rodio_thread(rodio_rx, progress_for_rodio);
@@ -178,7 +224,7 @@ pub async fn run_audio_engine(
                 if song_changed {
                     last_reported_duration = 0.;
                 }
-                handle_command(cmd, &rodio_tx, &mut radio, &fetch_tx, &queue_tx, &song_done, &mut bridge).await;
+                handle_command(cmd, &rodio_tx, &mut radio, &fetch_tx, &queue_tx, &song_done, &mut n).await;
                 fetching_next = false;
             }
             Some(result) = fetch_rx.recv() => {
@@ -195,7 +241,7 @@ pub async fn run_audio_engine(
                             .write_channel(DataChannel::Player)
                             .player
                             .is_playing = false;
-                        bridge.set_stopped();
+                        n.set_stopped();
                     }
                 }
             }
@@ -224,7 +270,7 @@ pub async fn run_audio_engine(
                         rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
                         song_done.store(false, Ordering::Relaxed);
                         last_reported_duration = 0.;
-                        bridge.song_started(&first.title, &first.artist, &first.album, &first.thumbnail_url);
+                        n.song_started(&first.title, &first.artist, &first.album, &first.thumbnail_url, &first.video_id);
                         let tx = fetch_tx.clone();
                         let vid = first.video_id.clone();
                         tokio::spawn(async move {
@@ -236,7 +282,7 @@ pub async fn run_audio_engine(
                     } else {
                         tracing::warn!("auto-queue: empty suggestions, stopping playback");
                         radio.write_channel(DataChannel::Player).player.is_playing = false;
-                        bridge.set_stopped();
+                        n.set_stopped();
                     }
                 } else if !songs.is_empty() {
                     let current_id = radio.read().player.current_video_id.clone();
@@ -268,7 +314,7 @@ pub async fn run_audio_engine(
                 if total > 0. && (total - last_reported_duration).abs() > 0.5 {
                     last_reported_duration = total;
                     let p = radio.read().player.clone();
-                    bridge.update_duration(
+                    n.update_duration(
                         &p.title,
                         &p.artist,
                         &p.album,
@@ -315,7 +361,7 @@ pub async fn run_audio_engine(
 
                         rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
                         last_reported_duration = 0.;
-                        bridge.song_started(&next.title, &next.artist, &next.album, &next.thumbnail_url);
+                        n.song_started(&next.title, &next.artist, &next.album, &next.thumbnail_url, &next.video_id);
 
                         let tx = fetch_tx.clone();
                         let video_id = next.video_id.clone();
@@ -363,7 +409,7 @@ pub async fn run_audio_engine(
                         } else {
                             info!(idx, "queue exhausted, stopping playback");
                             radio.write_channel(DataChannel::Player).player.is_playing = false;
-                            bridge.set_stopped();
+                            n.set_stopped();
                         }
                     }
                 }
@@ -380,7 +426,7 @@ async fn handle_command(
     fetch_tx: &mpsc::Sender<Result<AudioRaw, String>>,
     queue_tx: &mpsc::Sender<Vec<QueueSong>>,
     song_done: &Arc<AtomicBool>,
-    bridge: &mut MediaBridge,
+    n: &mut Notifiers,
 ) {
     match cmd {
         AudioCommand::Play {
@@ -427,7 +473,7 @@ async fn handle_command(
                 tx.send(result).await.ok();
             });
 
-            bridge.song_started(&title, &artist, &album, &thumbnail_url);
+            n.song_started(&title, &artist, &album, &thumbnail_url, &video_id);
 
             // Fetch suggestions to populate the queue behind the current song.
             if let Some(yt) = yt {
@@ -498,7 +544,7 @@ async fn handle_command(
                 p.current_like_status = song.like_status.clone();
             }
 
-            bridge.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url);
+            n.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url, &song.video_id);
 
             let tx = fetch_tx.clone();
             let video_id = song.video_id.clone();
@@ -535,7 +581,7 @@ async fn handle_command(
                     p.current_like_status = song.like_status.clone();
                 }
 
-                bridge.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url);
+                n.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url, &song.video_id);
 
                 let tx = fetch_tx.clone();
                 let video_id = song.video_id.clone();
@@ -573,7 +619,7 @@ async fn handle_command(
                     p.current_video_id = song.video_id.clone();
                 }
 
-                bridge.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url);
+                n.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url, &song.video_id);
 
                 let tx = fetch_tx.clone();
                 let video_id = song.video_id.clone();
@@ -590,28 +636,27 @@ async fn handle_command(
         AudioCommand::Pause => {
             rodio_tx.send(RodioCmd::Pause).ok();
             radio.write_channel(DataChannel::Player).player.is_playing = false;
-            let pos = radio.read().player.current_secs;
-            bridge.set_paused(pos);
+            let (pos, title, artist, album, cover, vid) = song_fields(radio);
+            n.set_paused(pos, &title, &artist, &album, &cover, &vid);
         }
         AudioCommand::Resume => {
             rodio_tx.send(RodioCmd::Resume).ok();
             radio.write_channel(DataChannel::Player).player.is_playing = true;
-            let pos = radio.read().player.current_secs;
-            bridge.set_playing(pos);
+            let (pos, title, artist, album, cover, vid) = song_fields(radio);
+            n.set_playing(pos, &title, &artist, &album, &cover, &vid);
         }
         AudioCommand::Toggle => {
-            let (is_playing, pos) = {
-                let p = &radio.read().player;
-                (p.is_playing, p.current_secs)
-            };
+            let is_playing = radio.read().player.is_playing;
             if is_playing {
                 rodio_tx.send(RodioCmd::Pause).ok();
                 radio.write_channel(DataChannel::Player).player.is_playing = false;
-                bridge.set_paused(pos);
+                let (pos, title, artist, album, cover, vid) = song_fields(radio);
+                n.set_paused(pos, &title, &artist, &album, &cover, &vid);
             } else {
                 rodio_tx.send(RodioCmd::Resume).ok();
                 radio.write_channel(DataChannel::Player).player.is_playing = true;
-                bridge.set_playing(pos);
+                let (pos, title, artist, album, cover, vid) = song_fields(radio);
+                n.set_playing(pos, &title, &artist, &album, &cover, &vid);
             }
         }
         AudioCommand::Stop => {
@@ -619,7 +664,8 @@ async fn handle_command(
             let mut state = radio.write_channel(DataChannel::Player);
             state.player.is_playing = false;
             state.player.current_secs = 0.;
-            bridge.set_stopped();
+            drop(state);
+            n.set_stopped();
         }
         AudioCommand::Seek(secs) => {
             rodio_tx
@@ -642,6 +688,19 @@ async fn handle_command(
             }
         }
     }
+}
+
+/// Extract the fields needed to update external notifiers from the current player state.
+fn song_fields(radio: &RadioStation<Data, DataChannel>) -> (f32, String, String, String, String, String) {
+    let p = &radio.read().player;
+    (
+        p.current_secs,
+        p.title.clone(),
+        p.artist.clone(),
+        p.album.clone(),
+        p.thumbnail_url.clone(),
+        p.current_video_id.clone(),
+    )
 }
 
 fn rodio_thread(rx: std::sync::mpsc::Receiver<RodioCmd>, progress: Arc<Mutex<ProgressState>>) {

@@ -26,7 +26,7 @@ checksum = "5351dcebb14b579ccab05f288596b2ae097005be7ee50a7c3d4ca9d0d5a66f6a"
 dependencies = [
  "enumn",
  "serde",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -2268,6 +2268,19 @@ dependencies = [
  "option-ext",
  "redox_users",
  "windows-sys 0.48.0",
+]
+
+[[package]]
+name = "discord-rich-presence"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a75db747ecd252c01bfecaf709b07fcb4c634adf0edb5fed47bc9c3052e7076b"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_repr",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -4684,7 +4697,7 @@ dependencies = [
  "serde_core",
  "tempfile",
  "thiserror 2.0.18",
- "uuid",
+ "uuid 1.24.0",
  "windows 0.61.3",
 ]
 
@@ -7992,7 +8005,7 @@ dependencies = [
  "servo-storage-traits",
  "servo-url",
  "strum",
- "uuid",
+ "uuid 1.24.0",
  "webrender_api",
  "zeroize",
 ]
@@ -8045,7 +8058,7 @@ dependencies = [
  "servo-net-traits",
  "servo-profile-traits",
  "servo-url",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -8063,7 +8076,7 @@ dependencies = [
  "servo-net-traits",
  "servo-profile-traits",
  "servo-url",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -8108,7 +8121,7 @@ dependencies = [
  "stylo",
  "stylo_traits",
  "url",
- "uuid",
+ "uuid 1.24.0",
  "webdriver",
  "webrender_api",
 ]
@@ -8164,7 +8177,7 @@ dependencies = [
  "unicode-properties",
  "unicode-script",
  "url",
- "uuid",
+ "uuid 1.24.0",
  "webrender_api",
  "winapi",
  "xml",
@@ -8192,7 +8205,7 @@ dependencies = [
  "servo-profile-traits",
  "servo-url",
  "stylo",
- "uuid",
+ "uuid 1.24.0",
  "webrender_api",
 ]
 
@@ -8366,7 +8379,7 @@ dependencies = [
  "unicode-script",
  "url",
  "urlpattern",
- "uuid",
+ "uuid 1.24.0",
  "webrender",
  "webrender_api",
  "wr_malloc_size_of",
@@ -8482,7 +8495,7 @@ checksum = "f6dd78a2df3cd7d63469986144b47a8ed2a5f6c3d42bae6e239c89e8fd720908"
 dependencies = [
  "malloc_size_of_derive",
  "servo-malloc-size-of",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -8523,7 +8536,7 @@ checksum = "834bf866cefdfb646f172cca56d4579c5357296e0bdf7e73b147f08918e8dd92"
 dependencies = [
  "log",
  "servo-media-streams",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -8608,7 +8621,7 @@ dependencies = [
  "tower",
  "tungstenite 0.29.0",
  "url",
- "uuid",
+ "uuid 1.24.0",
  "webpki-roots",
  "webrender_api",
 ]
@@ -8650,7 +8663,7 @@ dependencies = [
  "sys-locale",
  "tokio",
  "url",
- "uuid",
+ "uuid 1.24.0",
  "webrender_api",
 ]
 
@@ -8910,7 +8923,7 @@ dependencies = [
  "unicode-script",
  "url",
  "urlpattern",
- "uuid",
+ "uuid 1.24.0",
  "web_atoms",
  "webdriver",
  "webrender_api",
@@ -9017,7 +9030,7 @@ dependencies = [
  "servo-storage-traits",
  "servo-url",
  "tempfile",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -9032,7 +9045,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo-profile-traits",
  "servo-url",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -9069,7 +9082,7 @@ dependencies = [
  "servo-malloc-size-of",
  "servo_arc",
  "url",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -10964,6 +10977,15 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
+dependencies = [
+ "getrandom 0.2.17",
+]
+
+[[package]]
+name = "uuid"
 version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
@@ -11504,6 +11526,7 @@ dependencies = [
  "bytes",
  "chacha20poly1305 0.10.1",
  "dirs",
+ "discord-rich-presence",
  "freya",
  "rand 0.8.7",
  "regex",
@@ -12516,7 +12539,7 @@ dependencies = [
  "serde_repr",
  "tracing",
  "uds_windows",
- "uuid",
+ "uuid 1.24.0",
  "windows-sys 0.61.2",
  "winnow 0.7.15",
  "zbus_macros",
