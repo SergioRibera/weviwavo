@@ -1,4 +1,5 @@
 mod engine;
+mod media_controls;
 pub(crate) mod nsig;
 mod streaming;
 mod youtube;

@@ -43,6 +43,8 @@
           vulkan-loader
 
           alsa-lib
+
+          dbus
         ];
 
         appPkg = (pkgs.rustPlatform.buildRustPackage.override { stdenv = pkgs.clangStdenv; }) (finalAttrs: {
@@ -64,6 +66,8 @@
 
               rustPlatform.bindgenHook
               autoPatchelfHook
+
+              dbus.dev
             ]
             ++ lib.optionals stdenv.buildPlatform.isDarwin [
               libiconv
@@ -141,6 +145,7 @@
             ++ libraries;
           buildInputs = with pkgs; [
             llvmPackages.bintools
+            dbus.dev
           ];
           LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath libraries}";
           # jemalloc configure: needs _GNU_SOURCE for strerror_r detection.

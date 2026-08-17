@@ -27,7 +27,7 @@ pub async fn run_startup(mut radio: RadioStation<Data, DataChannel>) {
 
     tokio::join!(
         startup_inner(radio),
-        run_audio_engine(audio_rx, radio),
+        run_audio_engine(audio_rx, radio, sender),
         run_nav_engine(nav_rx, radio),
     );
 }

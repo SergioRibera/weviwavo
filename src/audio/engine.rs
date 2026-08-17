@@ -10,6 +10,7 @@ use tracing::{error, info};
 
 use crate::app::{Data, DataChannel, QueueSong};
 use crate::audio::{AudioQuality, AudioRaw, youtube::fetch_audio_bytes};
+use crate::audio::media_controls::MediaBridge;
 
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -32,8 +33,12 @@ pub enum AudioCommand {
     Previous,
     Pause,
     Resume,
+    /// Toggle play/pause based on current playback state.
+    Toggle,
     Stop,
     Seek(f32),
+    /// Seek relative to current position; positive = forward, negative = backward.
+    SeekRelative(f32),
     SetVolume(f32),
 }
 
@@ -135,6 +140,7 @@ impl AudioEngine {
 pub async fn run_audio_engine(
     mut rx: mpsc::Receiver<AudioCommand>,
     mut radio: RadioStation<Data, DataChannel>,
+    cmd_tx: mpsc::Sender<AudioCommand>,
 ) {
     let (rodio_tx, rodio_rx) = std::sync::mpsc::channel::<RodioCmd>();
     let (fetch_tx, mut fetch_rx) = mpsc::channel::<Result<AudioRaw, String>>(4);
@@ -147,6 +153,10 @@ pub async fn run_audio_engine(
 
     // `true` while we're waiting for an auto-queue fetch after the queue exhausted.
     let mut fetching_next = false;
+    // Last total_secs value pushed to the media bridge; reset to 0.0 on each new song.
+    let mut last_reported_duration: f32 = 0.;
+
+    let mut bridge = MediaBridge::new(cmd_tx);
 
     tokio::task::spawn_blocking(move || {
         rodio_thread(rodio_rx, progress_for_rodio);
@@ -158,7 +168,17 @@ pub async fn run_audio_engine(
         tokio::select! {
             maybe_cmd = rx.recv() => {
                 let Some(cmd) = maybe_cmd else { break };
-                handle_command(cmd, &rodio_tx, &mut radio, &fetch_tx, &queue_tx, &song_done).await;
+                let song_changed = matches!(
+                    cmd,
+                    AudioCommand::Play { .. }
+                        | AudioCommand::PlayFromQueue { .. }
+                        | AudioCommand::Next
+                        | AudioCommand::Previous
+                );
+                if song_changed {
+                    last_reported_duration = 0.;
+                }
+                handle_command(cmd, &rodio_tx, &mut radio, &fetch_tx, &queue_tx, &song_done, &mut bridge).await;
                 fetching_next = false;
             }
             Some(result) = fetch_rx.recv() => {
@@ -175,6 +195,7 @@ pub async fn run_audio_engine(
                             .write_channel(DataChannel::Player)
                             .player
                             .is_playing = false;
+                        bridge.set_stopped();
                     }
                 }
             }
@@ -202,6 +223,8 @@ pub async fn run_audio_engine(
                         }
                         rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
                         song_done.store(false, Ordering::Relaxed);
+                        last_reported_duration = 0.;
+                        bridge.song_started(&first.title, &first.artist, &first.album, &first.thumbnail_url);
                         let tx = fetch_tx.clone();
                         let vid = first.video_id.clone();
                         tokio::spawn(async move {
@@ -213,6 +236,7 @@ pub async fn run_audio_engine(
                     } else {
                         tracing::warn!("auto-queue: empty suggestions, stopping playback");
                         radio.write_channel(DataChannel::Player).player.is_playing = false;
+                        bridge.set_stopped();
                     }
                 } else if !songs.is_empty() {
                     let current_id = radio.read().player.current_video_id.clone();
@@ -238,6 +262,19 @@ pub async fn run_audio_engine(
                     let mut state = radio.write_channel(DataChannel::Player);
                     state.player.current_secs = current;
                     state.player.total_secs = total;
+                }
+
+                // Push duration to the bridge once the decoder has resolved it.
+                if total > 0. && (total - last_reported_duration).abs() > 0.5 {
+                    last_reported_duration = total;
+                    let p = radio.read().player.clone();
+                    bridge.update_duration(
+                        &p.title,
+                        &p.artist,
+                        &p.album,
+                        &p.thumbnail_url,
+                        Duration::from_secs_f32(total),
+                    );
                 }
 
                 if song_done.load(Ordering::Relaxed) {
@@ -277,6 +314,8 @@ pub async fn run_audio_engine(
                         }
 
                         rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
+                        last_reported_duration = 0.;
+                        bridge.song_started(&next.title, &next.artist, &next.album, &next.thumbnail_url);
 
                         let tx = fetch_tx.clone();
                         let video_id = next.video_id.clone();
@@ -324,6 +363,7 @@ pub async fn run_audio_engine(
                         } else {
                             info!(idx, "queue exhausted, stopping playback");
                             radio.write_channel(DataChannel::Player).player.is_playing = false;
+                            bridge.set_stopped();
                         }
                     }
                 }
@@ -332,6 +372,7 @@ pub async fn run_audio_engine(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_command(
     cmd: AudioCommand,
     rodio_tx: &std::sync::mpsc::Sender<RodioCmd>,
@@ -339,6 +380,7 @@ async fn handle_command(
     fetch_tx: &mpsc::Sender<Result<AudioRaw, String>>,
     queue_tx: &mpsc::Sender<Vec<QueueSong>>,
     song_done: &Arc<AtomicBool>,
+    bridge: &mut MediaBridge,
 ) {
     match cmd {
         AudioCommand::Play {
@@ -384,6 +426,8 @@ async fn handle_command(
                     .map_err(|e| e.to_string());
                 tx.send(result).await.ok();
             });
+
+            bridge.song_started(&title, &artist, &album, &thumbnail_url);
 
             // Fetch suggestions to populate the queue behind the current song.
             if let Some(yt) = yt {
@@ -454,6 +498,8 @@ async fn handle_command(
                 p.current_like_status = song.like_status.clone();
             }
 
+            bridge.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url);
+
             let tx = fetch_tx.clone();
             let video_id = song.video_id.clone();
             tokio::spawn(async move {
@@ -488,6 +534,8 @@ async fn handle_command(
                     p.current_video_id = song.video_id.clone();
                     p.current_like_status = song.like_status.clone();
                 }
+
+                bridge.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url);
 
                 let tx = fetch_tx.clone();
                 let video_id = song.video_id.clone();
@@ -525,6 +573,8 @@ async fn handle_command(
                     p.current_video_id = song.video_id.clone();
                 }
 
+                bridge.song_started(&song.title, &song.artist, &song.album, &song.thumbnail_url);
+
                 let tx = fetch_tx.clone();
                 let video_id = song.video_id.clone();
                 tokio::spawn(async move {
@@ -540,21 +590,49 @@ async fn handle_command(
         AudioCommand::Pause => {
             rodio_tx.send(RodioCmd::Pause).ok();
             radio.write_channel(DataChannel::Player).player.is_playing = false;
+            let pos = radio.read().player.current_secs;
+            bridge.set_paused(pos);
         }
         AudioCommand::Resume => {
             rodio_tx.send(RodioCmd::Resume).ok();
             radio.write_channel(DataChannel::Player).player.is_playing = true;
+            let pos = radio.read().player.current_secs;
+            bridge.set_playing(pos);
+        }
+        AudioCommand::Toggle => {
+            let (is_playing, pos) = {
+                let p = &radio.read().player;
+                (p.is_playing, p.current_secs)
+            };
+            if is_playing {
+                rodio_tx.send(RodioCmd::Pause).ok();
+                radio.write_channel(DataChannel::Player).player.is_playing = false;
+                bridge.set_paused(pos);
+            } else {
+                rodio_tx.send(RodioCmd::Resume).ok();
+                radio.write_channel(DataChannel::Player).player.is_playing = true;
+                bridge.set_playing(pos);
+            }
         }
         AudioCommand::Stop => {
             rodio_tx.send(RodioCmd::Stop).ok();
             let mut state = radio.write_channel(DataChannel::Player);
             state.player.is_playing = false;
             state.player.current_secs = 0.;
+            bridge.set_stopped();
         }
         AudioCommand::Seek(secs) => {
             rodio_tx
                 .send(RodioCmd::Seek(Duration::from_secs_f32(secs)))
                 .ok();
+        }
+        AudioCommand::SeekRelative(delta) => {
+            let (current, total) = {
+                let p = &radio.read().player;
+                (p.current_secs, p.total_secs)
+            };
+            let target = (current + delta).clamp(0., total);
+            rodio_tx.send(RodioCmd::Seek(Duration::from_secs_f32(target))).ok();
         }
         AudioCommand::SetVolume(vol) => {
             rodio_tx.send(RodioCmd::SetVolume(vol)).ok();
