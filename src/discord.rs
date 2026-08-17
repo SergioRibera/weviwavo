@@ -7,7 +7,7 @@ use tracing::{info, warn};
 
 /// Discord Developer Portal → New Application → copy the Application ID here.
 /// https://discord.com/developers/applications
-const APP_ID: &str = "YOUR_DISCORD_APP_ID";
+const APP_ID: &str = "1539009832512921690";
 
 const GITHUB_URL: &str = "https://github.com/SergioRibera/weviwavo";
 const YT_MUSIC_BASE: &str = "https://music.youtube.com/watch?v=";
