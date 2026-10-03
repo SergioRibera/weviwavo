@@ -3,9 +3,9 @@ use freya::prelude::*;
 use freya::radio::use_radio;
 use tokio::sync::mpsc;
 
+use super::use_cached_thumbnail;
 use crate::app::{Data, DataChannel, QueueSong};
 use crate::audio::{AudioCommand, AudioQuality};
-use super::use_cached_thumbnail;
 
 // ── QueueSongRow ──────────────────────────────────────────────────────────────
 
@@ -21,9 +21,7 @@ struct QueueSongRow {
 
 impl PartialEq for QueueSongRow {
     fn eq(&self, other: &Self) -> bool {
-        self.song == other.song
-            && self.index == other.index
-            && self.is_current == other.is_current
+        self.song == other.song && self.index == other.index && self.is_current == other.is_current
     }
 }
 
@@ -157,29 +155,13 @@ impl Component for PlayerExpanded {
         let audio_cmd = state.audio_cmd.clone();
         drop(state);
 
-        let mut left_tab = use_state(|| 0usize);
         let mut right_tab = use_state(|| 0usize);
         let mut autoplay = use_state(|| true);
-
-        // Window size
-        let root_size = Platform::get().root_size.read();
-        let window_w = root_size.width;
-        let window_h = root_size.height;
-        drop(root_size);
-
-        const HOMEBAR_H: f32 = 64.;
-        const PLAYERBAR_H: f32 = 67.;
-        let content_area_h = (window_h - HOMEBAR_H - PLAYERBAR_H).max(0.);
-
-        // Art size: fill available space minus padding (40px each side = 80px), capped by
-        // content height minus tab row (~50px) + some breathing room (110px total).
-        let art_size = (window_w / 2. - 80.)
-            .min(content_area_h - 160.)
-            .max(100.);
 
         rect()
             .horizontal()
             .expanded()
+            .content(Content::Flex)
             .background(Color::BLACK)
             // ── Left panel ────────────────────────────────────────────────────
             .child(
@@ -187,35 +169,33 @@ impl Component for PlayerExpanded {
                     .vertical()
                     .width(Size::flex(1.))
                     .height(Size::Fill)
-                    .padding(Gaps::new_all(40.))
+                    .cross_align(Alignment::Center)
+                    .padding(Gaps::new_all(45.))
                     .spacing(16.)
-                    // Album art
+                    // Album art — fixed square
                     .child(
                         rect()
-                            .expanded()
-                            .center()
-                            .child(
-                                rect()
-                                    .width(Size::px(art_size))
-                                    .height(Size::px(art_size))
-                                    .corner_radius(8.)
-                                    .overflow(Overflow::Clip)
-                                    .maybe_child({
-                                        let url = radio.read().player.thumbnail_url.clone();
-                                        use_cached_thumbnail(&url).map(|src| {
-                                            ImageViewer::new(src)
-                                                .expanded()
-                                                .image_cover(ImageCover::Center)
-                                        })
-                                    }),
-                            ),
-                    ),
+                            .width(Size::percent(60.))
+                            .height(Size::fill())
+                            .corner_radius(8.)
+                            .overflow(Overflow::Clip)
+                            .maybe_child({
+                                let url = radio.read().player.thumbnail_url.clone();
+                                use_cached_thumbnail(&url).map(|src| {
+                                    ImageViewer::new(src)
+                                        .expanded()
+                                        .image_cover(ImageCover::Center)
+                                })
+                            }),
+                    )
+                    // Suggestions — fills remaining space
+                    .child(rect().vertical().width(Size::Fill).height(Size::flex(1.))),
             )
             // ── Right panel ───────────────────────────────────────────────────
             .child(
                 rect()
                     .vertical()
-                    .width(Size::flex(1.))
+                    .width(Size::percent(40.))
                     .height(Size::Fill)
                     // Tab bar
                     .child(
@@ -226,47 +206,46 @@ impl Component for PlayerExpanded {
                             .cross_align(Alignment::Center)
                             .padding(Gaps::new_symmetric(0., 16.))
                             .spacing(16.)
-                            .children(
-                                ["A CONTINUACIÓN", "LETRA", "COMENTARIOS", "RELACIONADO"]
-                                    .into_iter()
-                                    .enumerate()
-                                    .map(|(i, label_text)| {
-                                        let active = *right_tab.read() == i;
-                                        rect()
-                                            .height(Size::Fill)
-                                            .cross_align(Alignment::Center)
-                                            .border(if active {
-                                                Border::new()
-                                                    .width(BorderWidth {
-                                                        bottom: 2.,
-                                                        ..Default::default()
-                                                    })
-                                                    .fill(Color::WHITE)
-                                                    .alignment(BorderAlignment::Inner)
-                                            } else {
-                                                Border::new()
+                            .children(["A CONTINUACIÓN", "LETRA"].into_iter().enumerate().map(
+                                |(i, label_text)| {
+                                    let active = *right_tab.read() == i;
+                                    let mut border = Border::new();
+                                    if active {
+                                        border = border
+                                            .width(BorderWidth {
+                                                bottom: 2.,
+                                                top: 0.,
+                                                right: 0.,
+                                                left: 0.,
                                             })
-                                            .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                                            .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
-                                            .on_press(move |_| right_tab.set(i))
-                                            .child(
-                                                label()
-                                                    .text(label_text)
-                                                    .font_size(12.)
-                                                    .font_weight(if active {
-                                                        FontWeight::BOLD
-                                                    } else {
-                                                        FontWeight::NORMAL
-                                                    })
-                                                    .color(if active {
-                                                        Color::WHITE
-                                                    } else {
-                                                        Color::from_hex("#888888").unwrap()
-                                                    }),
-                                            )
-                                            .into_element()
-                                    }),
-                            ),
+                                            .fill(Color::WHITE);
+                                    }
+                                    rect()
+                                        .height(Size::Fill)
+                                        .cross_align(Alignment::Center)
+                                        .border(border)
+                                        .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
+                                        .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                        .on_press(move |_| right_tab.set(i))
+                                        .child(
+                                            label()
+                                                .text(label_text)
+                                                .font_size(12.)
+                                                .max_lines(1)
+                                                .font_weight(if active {
+                                                    FontWeight::BOLD
+                                                } else {
+                                                    FontWeight::NORMAL
+                                                })
+                                                .color(if active {
+                                                    Color::WHITE
+                                                } else {
+                                                    Color::from_hex("#888888").unwrap()
+                                                }),
+                                        )
+                                        .into_element()
+                                },
+                            )),
                     )
                     // Divider
                     .child(
@@ -336,7 +315,9 @@ impl Component for PlayerExpanded {
                                                         label()
                                                             .text("Reproduciendo de")
                                                             .font_size(12.)
-                                                            .color(Color::from_hex("#888888").unwrap()),
+                                                            .color(
+                                                                Color::from_hex("#888888").unwrap(),
+                                                            ),
                                                     )
                                                     .child(
                                                         label()
@@ -391,8 +372,12 @@ impl Component for PlayerExpanded {
                                                     })
                                                     .cross_align(Alignment::Center)
                                                     .padding(Gaps::new_all(2.))
-                                                    .on_pointer_enter(|_| Cursor::set(CursorIcon::Pointer))
-                                                    .on_pointer_leave(|_| Cursor::set(CursorIcon::Default))
+                                                    .on_pointer_enter(|_| {
+                                                        Cursor::set(CursorIcon::Pointer)
+                                                    })
+                                                    .on_pointer_leave(|_| {
+                                                        Cursor::set(CursorIcon::Default)
+                                                    })
                                                     .on_press(move |_| autoplay.toggle())
                                                     .child(
                                                         rect()

@@ -214,6 +214,7 @@ fn apply(client: &mut DiscordIpcClient, p: &Presence) -> Result<(), Box<dyn std:
     }
 
     client.set_activity(act)?;
+    tracing::info!(title = p.title.as_str(), "discord: activity set");
     Ok(())
 }
 

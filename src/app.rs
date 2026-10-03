@@ -52,7 +52,6 @@ struct AppLayout;
 
 const SIDEBAR_COLLAPSED: f32 = 72.;
 const SIDEBAR_EXPANDED: f32 = 240.;
-const SIDEBAR_THRESHOLD: f32 = 140.; // below this → icon-only mode
 
 impl Component for AppLayout {
     fn render(&self) -> impl IntoElement {
@@ -149,7 +148,6 @@ impl Component for AppLayout {
             }
         }
         let expand_progress = expand_anim.read().value(); // reactive: 0.0 → 1.0
-        let panel_h = expand_progress * content_h;
         let show_expanded = is_expanded || *expand_anim.is_running().read();
 
         // ── layout ────────────────────────────────────────────────────────
